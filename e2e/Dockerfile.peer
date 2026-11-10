@@ -1,7 +1,0 @@
-# A stock WireGuard peer (the Docker VM's kernel WireGuard through wg-quick)
-# with the services the tests talk to: TCP/UDP echo on port 7 (socat), plus
-# whatever compose starts in its network namespace (HTTP, iperf3).
-FROM alpine:3.20
-RUN apk add --no-cache wireguard-tools bash iproute2 iptables socat python3 iperf3 tcpdump
-COPY peer-entrypoint.sh /peer-entrypoint.sh
-ENTRYPOINT ["/peer-entrypoint.sh"]

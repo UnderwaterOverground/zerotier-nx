@@ -28,7 +28,7 @@ GLUE_SRCS := $(wildcard *.cpp) stubs/PacketMultiplexer.cpp
 COMMON := -MMD -MP -g -ffunction-sections -fdata-sections -fno-strict-aliasing -fwrapv -fexceptions \
           -std=gnu++17 -Wall -Wno-deprecated -Wno-unused-variable \
           -DNDEBUG -DZT_NO_PEER_METRICS $(LIMITS) \
-          -I$(ZT)/node -I$(ZT)/include -I$(ZT) -isystem $(ZT)/ext -I.
+          -I$(ZT)/node -I$(ZT)/include -I$(ZT) -isystem $(ZT)/ext -I. -I../../crates/ztnx-ffi/include
 # In this order: the later stubs include core headers that need the mutex.
 STUBS  := -include stubs/Metrics.hpp -include stubs/OSUtils.hpp -include stubs/Bond.hpp \
           -include stubs/PacketMultiplexer.hpp

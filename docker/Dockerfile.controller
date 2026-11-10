@@ -1,0 +1,17 @@
+# Self-hosted ZeroTier controller for the test network, built from the pinned
+# submodule (with patches/zerotier-* applied if the tree has them; they change
+# nothing in this build).
+# Build context: the repo root (docker build -f docker/Dockerfile.controller .). The controller code (nonfree/) is
+# source-available for non-commercial use; it is used here only for tests.
+FROM debian:bookworm AS build
+RUN apt-get update -qq && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+COPY third_party/ZeroTierOne /src
+WORKDIR /src
+RUN make ZT_NONFREE=1 ZT_SSO_SUPPORTED=0 -j"$(nproc)" one 2>&1 | tail -20 && ls -la zerotier-one
+
+FROM debian:bookworm-slim
+RUN apt-get update -qq && apt-get install -y --no-install-recommends curl iproute2 iputils-ping jq ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/zerotier-one /usr/sbin/zerotier-one
+RUN ln -sf /usr/sbin/zerotier-one /usr/sbin/zerotier-cli && ln -sf /usr/sbin/zerotier-one /usr/sbin/zerotier-idtool
+COPY docker/zt-entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

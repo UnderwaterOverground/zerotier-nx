@@ -1,110 +1,80 @@
-# Local WireGuard network for end-to-end tests: two stock peers (the Docker
-# VM's kernel WireGuard), an AmneziaWG peer, echo services, and the ztnx
-# client built for Linux. setup.sh generates the keys and .conf files under
-# state/.
+# The test network: a self-hosted ZeroTier controller, stock zerotier-one
+# peers, and a container where our own Linux builds run. The ZeroTier nodes
+# find each other through ZeroTier's public root servers, so this needs
+# internet access. Run through the scripts (setup.sh, run-tests.sh), which
+# set the paths below (env.sh).
 name: ztnx-e2e
 
 networks:
-  ztnx:
+  zt:
     ipam:
       config:
         - subnet: 172.31.2.0/24
 
 services:
-  # The server most tests talk to: wg 10.7.0.1, UDP 51820, with every
-  # client from state/keys.txt as a peer.
-  peer:
-    build: { context: ., dockerfile: Dockerfile.peer }
-    image: ztnx-e2e-peer
-    volumes:
-      - ./state/wg0.conf:/etc/wireguard/wg0.conf:ro
-    devices:
-      - /dev/net/tun:/dev/net/tun
+  controller:
+    image: ztnx-e2e-controller
+    build:
+      context: ${ZTNX_ZT_DIR}/../..
+      dockerfile: docker/Dockerfile.controller
+    environment:
+      ZEROTIER_API_SECRET: e2e-controller-token
     cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    volumes:
+      - ${ZTNX_STATE_DIR}/controller:/var/lib/zerotier-one
     networks:
-      ztnx:
-        ipv4_address: 172.31.2.20
-        aliases: [wg-server]
-    profiles: [peer]
+      zt:
+        ipv4_address: 172.31.2.10
 
-  # A second server (wg 10.7.0.9) for the several-peers test.
+  peer:
+    image: ztnx-e2e-peer
+    build:
+      context: ../docker
+      dockerfile: Dockerfile.peer
+    environment:
+      ZEROTIER_API_SECRET: e2e-peer-token
+      ZT_RUN_SERVERS: "1"
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    volumes:
+      - ${ZTNX_STATE_DIR}/peer:/var/lib/zerotier-one
+    networks:
+      zt:
+        ipv4_address: 172.31.2.20
+
   peer2:
     image: ztnx-e2e-peer
-    volumes:
-      - ./state/wg0-peer2.conf:/etc/wireguard/wg0.conf:ro
-    devices:
-      - /dev/net/tun:/dev/net/tun
+    profiles: [extra]
+    environment:
+      ZEROTIER_API_SECRET: e2e-peer-token
+      ZT_RUN_SERVERS: "1"
     cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    volumes:
+      - ${ZTNX_STATE_DIR}/peer2:/var/lib/zerotier-one
     networks:
-      ztnx:
+      zt:
         ipv4_address: 172.31.2.21
-    depends_on: [peer]
-    profiles: [peer]
 
-  # An AmneziaWG server (awg 10.7.1.1) for the obfuscation tests. Its port
-  # is also published on the host (UDP 51821) so a console on the LAN can
-  # test against it with state/awg-switch.conf.
-  awg-peer:
-    build: { context: ., dockerfile: Dockerfile.awg-peer }
-    image: ztnx-e2e-awg-peer
-    volumes:
-      - ./state/awg0.conf:/etc/amnezia/amneziawg/awg0.conf:ro
-      - ./state/awg1.conf:/etc/amnezia/amneziawg/awg1.conf:ro
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add: [NET_ADMIN]
-    ports: ["51821:51820/udp", "51822:51821/udp"]
-    networks:
-      ztnx:
-        ipv4_address: 172.31.2.22
-    profiles: [peer]
-
-  # HTTP (8080) and iperf3 (5201) servers inside peer's network namespace,
-  # reachable on its tunnel address (and its real one, for pass-through).
-  web:
-    image: python:3-alpine
-    network_mode: service:peer
-    command: ["python3", "-m", "http.server", "8080"]
-    depends_on: [peer]
-    profiles: [peer]
-
-  iperf:
-    image: networkstatic/iperf3
-    network_mode: service:peer
-    command: ["-s"]
-    depends_on: [peer]
-    profiles: [peer]
-
-  # ztnx-host built for Linux and run on the compose network.
-  # Build:  docker compose run --rm ztnx-build
-  # Run:    docker compose run --rm ztnx up --conf /state/client.conf ...
-  ztnx-build:
+  # Our builds for Linux run here (e2e/build-linux.sh puts them in /out).
+  client:
     image: ztnx-e2e-client
-    build: { context: ., dockerfile: Dockerfile.client }
-    working_dir: /src
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+    init: true
+    command: ["sleep", "infinity"]
     volumes:
       - ..:/src
-      - ztnx-cargo:/usr/local/cargo/registry
-    environment:
-      CARGO_TARGET_DIR: /src/target/linux
-    entrypoint: ["/src/e2e/build-linux.sh"]
-    profiles: [ztnx]
-
-  ztnx:
-    image: ztnx-e2e-client
-    build: { context: ., dockerfile: Dockerfile.client }
+      - ${ZTNX_ZT_DIR}:/src/third_party/ZeroTierOne
+      - ${ZTNX_OUT_DIR}:/out
+      - ${ZTNX_STATE_DIR}/client:/state
+      - ztnx-e2e-cargo:/usr/local/cargo/registry
     working_dir: /src
-    volumes:
-      - ..:/src:ro
-      - ./state:/state
-    environment:
-      RUST_LOG: ${RUST_LOG:-info}
-    entrypoint: ["/src/target/linux/bin/ztnx-host"]
-    cap_add: [NET_ADMIN]
     networks:
-      ztnx:
+      zt:
         ipv4_address: 172.31.2.30
-    profiles: [ztnx]
 
 volumes:
-  ztnx-cargo:
+  ztnx-e2e-cargo:

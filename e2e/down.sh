@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Stops the peers and deletes their state (keys and confs).
+# Stops the test network and deletes its state (identities, the network).
 set -euo pipefail
-cd "$(dirname "$0")"
-docker compose --profile peer --profile ztnx down -v --remove-orphans
-rm -rf state
+. "$(dirname "$0")/env.sh"
+cd "$E2E_DIR"
+docker compose --profile extra down -v
+rm -rf "$ZTNX_STATE_DIR"

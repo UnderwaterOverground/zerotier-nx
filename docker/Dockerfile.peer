@@ -1,0 +1,13 @@
+# Stock zerotier-one 1.16.2 from ZeroTier's apt repository, plus test servers.
+FROM debian:bookworm
+ARG VERSION=1.16.2
+RUN apt-get update -qq && apt-get install -y --no-install-recommends curl gpg ca-certificates && \
+    mkdir -p /usr/share/zerotier && \
+    curl -fsSL -o /tmp/zt.asc "https://download.zerotier.com/contact%40zerotier.com.gpg" && \
+    gpg --dearmor -o /usr/share/zerotier/zerotier.gpg /tmp/zt.asc && rm -f /tmp/zt.asc && \
+    echo "deb [signed-by=/usr/share/zerotier/zerotier.gpg] http://download.zerotier.com/debian/bookworm bookworm main" > /etc/apt/sources.list.d/zerotier.list && \
+    apt-get update -qq && \
+    apt-get install -y --no-install-recommends zerotier-one=${VERSION} iproute2 iputils-ping iperf3 socat tcpdump python3 jq && \
+    rm -rf /var/lib/apt/lists/* /var/lib/zerotier-one
+COPY zt-entrypoint.sh /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

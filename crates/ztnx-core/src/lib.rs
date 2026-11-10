@@ -28,6 +28,7 @@ pub mod l2;
 pub mod netstack;
 pub mod rng;
 pub mod selftest;
+pub mod stack;
 pub mod time;
 pub mod tls;
 

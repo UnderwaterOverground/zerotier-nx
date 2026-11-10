@@ -15,29 +15,6 @@ pub extern "C" fn ztnx_version() -> *const c_char {
     VERSION.as_ptr().cast()
 }
 
-/// Runs the crypto known-answer tests. Returns 0 on success, otherwise the
-/// failing test's code (see `ztnx_selftest_failure` in the header).
-#[no_mangle]
-pub extern "C" fn ztnx_selftest() -> u32 {
-    match ztnx_core::selftest::run() {
-        Ok(()) => 0,
-        Err(f) => f as u32,
-    }
-}
-
-/// Seals `iterations` packets of `packet_len` bytes with ChaCha20-Poly1305.
-#[no_mangle]
-pub extern "C" fn ztnx_bench_aead(packet_len: usize, iterations: u32) -> u64 {
-    let mut buf = alloc::vec![0u8; packet_len];
-    ztnx_core::bench::aead_seal_loop(&mut buf, iterations)
-}
-
-/// Runs `iterations` X25519 scalar multiplications.
-#[no_mangle]
-pub extern "C" fn ztnx_bench_x25519(iterations: u32) -> u64 {
-    ztnx_core::bench::x25519_loop(iterations)
-}
-
 /// Seeds the core's CSPRNG. Must be called before any key or TLS use.
 #[no_mangle]
 pub unsafe extern "C" fn ztnx_seed_rng(seed: *const u8) {
@@ -60,11 +37,11 @@ pub extern "C" fn ztnx_set_unix_time(unix_secs: u64) {
     ztnx_core::tls::CLOCK.set(unix_secs);
 }
 
-mod engine_ffi;
 mod logging;
+mod stack_ffi;
 mod tls_ffi;
-pub use engine_ffi::*;
 pub use logging::*;
+pub use stack_ffi::*;
 pub use tls_ffi::*;
 
 /// Rust heap accounting shared by the Horizon and host allocators: live

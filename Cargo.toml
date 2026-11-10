@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/ztnx-core", "crates/ztnx-ffi", "crates/ztnx-host"]
+members = ["crates/ztnx-core", "crates/ztnx-ffi"]
 exclude = ["third_party"]
 
 [workspace.package]
@@ -11,9 +11,7 @@ version = "0.1.0"
 [workspace.dependencies]
 ztnx-core = { path = "crates/ztnx-core", default-features = false }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
-chacha20 = { version = "0.9", default-features = false }
 x25519-dalek = { version = "3.0.0-pre.6", default-features = false, features = ["static_secrets", "zeroize"] }
-blake2 = { version = "0.10", default-features = false }
 hex-literal = "0.4"
 rustls = { version = "0.23.45", default-features = false }
 sha2 = { version = "0.10", default-features = false, features = ["oid"] }
@@ -23,7 +21,6 @@ p384 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 rsa = { version = "0.9", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-icmp", "auto-icmp-echo-reply"] }
 log = { version = "0.4", default-features = false }
 spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex"] }
@@ -31,9 +28,8 @@ spin = { version = "0.9", default-features = false, features = ["mutex", "spin_m
 [profile.release]
 panic = "abort"
 # Size matters on the Switch (custom sysmodules share ~16 MB): optimise for
-# size, except the per-byte data path (ChaCha20-Poly1305 for every tunnel
-# packet), which keeps full optimisation below. Handshake-rate code
-# (X25519, BLAKE2s, ECDSA) and per-packet bookkeeping are fine at "z".
+# size. Nothing here is on a per-byte hot path except TLS for the update
+# check, once per boot.
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
@@ -41,10 +37,3 @@ debug = 1
 
 [profile.dev]
 panic = "abort"
-
-[profile.release.package.chacha20]
-opt-level = 3
-[profile.release.package.poly1305]
-opt-level = 3
-[profile.release.package.chacha20poly1305]
-opt-level = 3

@@ -27,9 +27,6 @@ pub fn seed(seed: &[u8; 32]) {
         }
     }
     *guard = Some(ChaCha20Rng::from_seed(material));
-    drop(guard);
-    // The vendored tailscale-rs crates draw from the same generator.
-    ts_util::rng::set_fill_fn(|buf| fill(buf).expect("seeded above"));
 }
 
 pub fn is_seeded() -> bool {

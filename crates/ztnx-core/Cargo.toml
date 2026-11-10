@@ -1,6 +1,6 @@
 [package]
 name = "ztnx-core"
-description = "Sans-IO WireGuard engine core (no_std + alloc)"
+description = "Sans-IO netstack, Ethernet layer and TLS for zerotier-nx (no_std + alloc)"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
@@ -13,9 +13,7 @@ switch-limits = []
 
 [dependencies]
 chacha20poly1305.workspace = true
-chacha20.workspace = true
 x25519-dalek.workspace = true
-blake2.workspace = true
 rustls.workspace = true
 sha2.workspace = true
 hmac.workspace = true
@@ -25,14 +23,8 @@ rsa.workspace = true
 rand_core.workspace = true
 rand_chacha.workspace = true
 spin.workspace = true
-base64.workspace = true
 smoltcp.workspace = true
 log.workspace = true
-ts_keys = { path = "../../third_party/tailscale-rs/ts_keys", default-features = false }
-ts_time = { path = "../../third_party/tailscale-rs/ts_time", default-features = false }
-ts_util = { path = "../../third_party/tailscale-rs/ts_util", default-features = false }
-ts_tunnel = { path = "../../third_party/tailscale-rs/ts_tunnel", default-features = false }
-ts_packet = { path = "../../third_party/tailscale-rs/ts_packet", default-features = false }
 
 [dev-dependencies]
 hex-literal.workspace = true

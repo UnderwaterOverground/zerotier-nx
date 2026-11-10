@@ -1,4 +1,6 @@
-// C interface to the ztnx Rust core (crates/ztnx-ffi).
+// C interface to the ztnx Rust core (crates/ztnx-ffi): the userspace TCP/IP
+// stack homebrew sockets are mapped onto, its Ethernet layer, and TLS for the
+// update check. ZeroTier's core is separate (native/zt/ztnx_engine.h).
 #pragma once
 
 #include <stdbool.h>
@@ -9,20 +11,7 @@
 extern "C" {
 #endif
 
-// Selftest failure codes returned by ztnx_selftest().
-enum ztnx_selftest_failure {
-    ZTNX_SELFTEST_OK = 0,
-    ZTNX_SELFTEST_X25519 = 1,
-    ZTNX_SELFTEST_AEAD_SEAL = 2,
-    ZTNX_SELFTEST_AEAD_OPEN = 3,
-    ZTNX_SELFTEST_AEAD_TAMPER = 4,
-    ZTNX_SELFTEST_BLAKE2S = 5,
-};
-
 const char *ztnx_version(void);
-uint32_t ztnx_selftest(void);
-uint64_t ztnx_bench_aead(size_t packet_len, uint32_t iterations);
-uint64_t ztnx_bench_x25519(uint32_t iterations);
 
 // Routes the core's log records to cb (level 1 error .. 5 trace; msg valid
 // only during the call). max_level 0 disables logging.
@@ -41,6 +30,7 @@ void ztnx_seed_rng(const uint8_t seed[32]);
 
 // Fills buf from the core's CSPRNG. False if it has not been seeded yet.
 bool ztnx_random_bytes(uint8_t *buf, size_t len);
+
 // Wall-clock time (Unix seconds) used for certificate validity checks (the
 // update check's TLS).
 void ztnx_set_unix_time(uint64_t unix_secs);
@@ -59,126 +49,97 @@ size_t ztnx_tls_read(ZtnxTls *s, uint8_t *buf, size_t cap);
 uint32_t ztnx_tls_state(const ZtnxTls *s);
 const char *ztnx_tls_last_error(const ZtnxTls *s);
 
-// ---- Engine ----------------------------------------------------------------
-// A WireGuard interface configured from a wg-quick style .conf. The caller
-// owns the UDP socket and the clock: perform the sends it requests, feed
-// datagrams back, answer ZTNX_EVENT_RESOLVE, and call ztnx_engine_timeout by
-// ztnx_engine_next_deadline. Times are monotonic nanoseconds.
+// ---- The stack ---------------------------------------------------------------
+// One per process, guarded by the caller's lock. Time is the caller's
+// monotonic clock in nanoseconds.
+//
+// Every use is bracketed: ztnx_stack_begin(now), then socket calls and/or
+// frames arriving, then ztnx_stack_end(), which runs the TCP/IP stack once
+// over all of it and says whether frames are waiting to be sent. The one
+// thread that may call ZeroTier takes them with ztnx_l2_next_out.
 
-typedef struct ZtnxEngine ZtnxEngine;
+typedef struct ZtnxStack ZtnxStack;
 
-typedef struct {
-    const char *conf;  // the .conf text (UTF-8; need not be NUL-terminated)
-    size_t conf_len;
-} ZtnxConfig;
-
-typedef struct {
+typedef struct ZtnxAddr {
     uint8_t family;  // 4 or 6
-    uint8_t ip[16];  // IPv4 in the first 4 bytes
+    uint8_t ip[16];  // IPv4 uses the first 4 bytes
     uint16_t port;
 } ZtnxAddr;
 
-typedef struct {
-    uint8_t family;       // 4 or 6
-    uint8_t len;          // prefix length
-    uint8_t ip[16];       // IPv4 in the first 4 bytes
+typedef struct ZtnxPrefix {
+    uint8_t family;  // 4 or 6
+    uint8_t len;
+    uint8_t ip[16];  // IPv4 uses the first 4 bytes
     uint8_t reserved[6];
-} ZtnxPrefix;             // 24 bytes
+} ZtnxPrefix;
 
-#define ZTNX_IO_SEND_UDP 1u  // send data as one datagram to addr from the engine's UDP socket
+// One of our addresses on the network, with its prefix length.
+typedef struct ZtnxV4Net {
+    uint8_t ip[4];
+    uint8_t prefix;
+    uint8_t reserved[3];
+} ZtnxV4Net;
 
-typedef struct {
-    uint32_t kind;
+// A managed route: target/prefix through via, or on-link if has_via is 0.
+typedef struct ZtnxV4Route {
+    uint8_t target[4];
+    uint8_t prefix;
+    uint8_t has_via;
+    uint8_t reserved[2];
+    uint8_t via[4];
+} ZtnxV4Route;
+
+typedef struct ZtnxStackStats {
+    uint32_t arp_broadcasts;  // broadcast ARP requests sent
+    uint32_t arp_limited;     // requests held back by the broadcast budget
+    uint32_t unresolved;      // packets dropped waiting for a neighbour's MAC
+    uint32_t unroutable;      // packets with nowhere to go
+    uint32_t out_queued;      // IP packets waiting to be sent
     uint32_t reserved;
-    const uint8_t *data;  // valid until the next ztnx_engine_poll_io
-    size_t len;
-    ZtnxAddr addr;
-} ZtnxIo;
+} ZtnxStackStats;
 
-#define ZTNX_EVENT_LOG 0u
-#define ZTNX_EVENT_ADDRESSES 1u  // text "10.7.0.2/24 ..."; value = count. Once per reload.
-#define ZTNX_EVENT_PEERS 2u      // value = configured peers. Once per reload.
-#define ZTNX_EVENT_ERROR 3u
-// value = peer index, text = its Endpoint's host name, port = the port:
-// resolve it and call ztnx_engine_set_peer_endpoint. Repeated every 30 s
-// while the peer stays silent (the C driver answers it itself unless a
-// resolver hook takes over; see ztnx_driver.h).
-#define ZTNX_EVENT_RESOLVE 4u
-#define ZTNX_EVENT_HANDSHAKE 5u  // value = peer index, text = its name: a handshake completed
-#define ZTNX_EVENT_PEER_LOST 6u  // value = peer index, text = its name: no answer for 15 s; re-handshaking
+ZtnxStack *ztnx_stack_new(uint64_t now_ns);
+void ztnx_stack_free(ZtnxStack *s);
 
-typedef struct {
-    uint32_t kind;
-    uint32_t value;
-    uint16_t port;     // RESOLVE
-    uint16_t reserved;
-    const char *text;  // valid until the next ztnx_engine_poll_event
-} ZtnxEvent;
+#define ZTNX_OUT_PENDING 1u  // frames are waiting for ztnx_l2_next_out
+#define ZTNX_CHANGED 2u      // socket state may have changed: wake waiters
+void ztnx_stack_begin(ZtnxStack *s, uint64_t now_ns);
+uint32_t ztnx_stack_end(ZtnxStack *s);
 
-// An interface with no configuration yet (no address, no peers).
-ZtnxEngine *ztnx_engine_new(uint64_t now_ns, uint64_t unix_secs);
-// Parses and applies a .conf. On failure nothing changes and the reason
-// ("line 12: PublicKey: not valid base64") is in err[err_cap] (may be NULL/0).
-// Sessions start over; overlay socket ids stay valid.
-bool ztnx_engine_reload(ZtnxEngine *e, const ZtnxConfig *cfg, uint64_t now_ns, char *err, size_t err_cap);
-void ztnx_engine_free(ZtnxEngine *e);
-bool ztnx_engine_configured(ZtnxEngine *e);
-bool ztnx_engine_poll_io(ZtnxEngine *e, ZtnxIo *out);
-bool ztnx_engine_poll_event(ZtnxEngine *e, ZtnxEvent *out);
-// A datagram arrived on the engine's UDP socket.
-void ztnx_engine_udp(ZtnxEngine *e, const ZtnxAddr *src, const uint8_t *data, size_t len, uint64_t now_ns);
-void ztnx_engine_timeout(ZtnxEngine *e, uint64_t now_ns);
-uint64_t ztnx_engine_next_deadline(ZtnxEngine *e);
-// The network came back or changed (Wi-Fi after a wake, a new address):
-// host names are resolved again and every reachable peer is contacted now.
-void ztnx_engine_network_up(ZtnxEngine *e, uint64_t now_ns);
-// Answer to ZTNX_EVENT_RESOLVE (any time; also overrides an endpoint).
-void ztnx_engine_set_peer_endpoint(ZtnxEngine *e, uint32_t peer, const ZtnxAddr *addr, uint64_t now_ns);
-// [Interface] ListenPort, 0 if none: bind the UDP socket there.
-uint16_t ztnx_engine_listen_port(ZtnxEngine *e);
-uint16_t ztnx_engine_mtu(ZtnxEngine *e);
-// Our [Interface] addresses with prefix lengths. Returns how many there are.
-size_t ztnx_engine_addresses(ZtnxEngine *e, ZtnxPrefix *out, size_t cap);
-// Destinations that belong to the tunnel, for the socket layer: our own
-// addresses (/32, /128), then every peer's AllowedIPs, each once. Fixed
-// between reloads. Returns how many there are (can exceed cap).
-size_t ztnx_engine_routes(ZtnxEngine *e, ZtnxPrefix *out, size_t cap);
-// "a.b.c.d name\n" for this interface (if its .conf names it) and every
-// peer with an IPv4 /32 AllowedIP; NUL-terminated, truncated to cap.
-// Returns the full length (like snprintf).
-size_t ztnx_engine_hosts(ZtnxEngine *e, char *buf, size_t cap);
+// When begin/end should next run if nothing happens first (TCP timers, ARP
+// retries); UINT64_MAX if never.
+uint64_t ztnx_stack_next_deadline(ZtnxStack *s);
+bool ztnx_stack_out_pending(ZtnxStack *s);
+// After a sleep or a change of network underneath: drops what was queued and
+// re-checks neighbours as they are used.
+void ztnx_stack_link_reset(ZtnxStack *s);
+void ztnx_stack_stats(ZtnxStack *s, ZtnxStackStats *out);
 
-#define ZTNX_PEER_SESSION 1u         // a handshake in the last 180 s
-#define ZTNX_PEER_ENDPOINT_NAME 2u   // Endpoint= is a host name ...
-#define ZTNX_PEER_RESOLVING 4u       // ... not resolved yet (nothing to send to)
-#define ZTNX_PEER_ROAMED 8u          // endpoint differs from the configured one (learned from traffic)
-#define ZTNX_PEER_KEEPALIVE 16u      // PersistentKeepalive set
-#define ZTNX_PEER_PSK 32u            // PresharedKey set
-#define ZTNX_PEER_DEFAULT_ROUTE 64u  // AllowedIPs has 0.0.0.0/0 or ::/0
-typedef struct {
-    char name[32];              // NUL-terminated; from "# Name = ..." or "peerN"
-    uint8_t ipv4[4];            // first IPv4 /32 AllowedIP, else 0.0.0.0
-    uint8_t endpoint_ip[4];     // current endpoint, 0.0.0.0 if none
-    uint16_t endpoint_port;
-    uint16_t keepalive_s;       // PersistentKeepalive, 0 = off
-    uint32_t last_handshake_s;  // seconds ago; UINT32_MAX = never
-    uint32_t last_rx_s;         // seconds since the last authenticated packet; UINT32_MAX = never
-    uint32_t flags;             // ZTNX_PEER_*
-    uint64_t rx_bytes;          // wire bytes (like `wg show ... transfer`)
-    uint64_t tx_bytes;
-    uint32_t allowed_ips;       // prefix count
-    uint32_t reserved;
-} ZtnxPeerInfo;                 // 80 bytes
-#ifdef __cplusplus
-static_assert(sizeof(ZtnxPeerInfo) == 80, "ZtnxPeerInfo layout");
-static_assert(sizeof(ZtnxPrefix) == 24, "ZtnxPrefix layout");
-#endif
-// Every configured peer, in .conf order, up to max of them into out.
-// Returns how many there are (can exceed max).
-size_t ztnx_engine_peers(ZtnxEngine *e, ZtnxPeerInfo *out, size_t max);
+// ---- Ethernet (the ZeroTier side) --------------------------------------------
+// MACs are 48-bit values as ZeroTier writes them: first octet in bits 40-47.
 
-// ---- Overlay sockets (tunnel side) ------------------------------------------
-// Non-blocking. Ids are > 0; errors are negative ZTNX_E* codes.
+#define ZTNX_ETHERTYPE_IPV4 0x0800u
+#define ZTNX_ETHERTYPE_ARP 0x0806u
+
+// The network is up, or its configuration changed. mac is ours; mtu the
+// network's. False if there is no address or an argument is invalid.
+bool ztnx_l2_configure(ZtnxStack *s, uint64_t nwid, uint64_t mac, uint16_t mtu,
+                       const ZtnxV4Net *addrs, size_t n_addrs,
+                       const ZtnxV4Route *routes, size_t n_routes);
+// The network is gone. Sockets stay open; their packets go nowhere.
+void ztnx_l2_down(ZtnxStack *s);
+// A frame arrived from the network. Call between begin and end.
+void ztnx_l2_frame_in(ZtnxStack *s, uint64_t src_mac, uint64_t dst_mac, uint32_t ethertype,
+                      const uint8_t *data, size_t len);
+// Takes the next frame to send: its payload into buf, returning the length,
+// or 0 if there is none this time (ztnx_stack_out_pending says whether to ask
+// again). The source MAC is ours.
+size_t ztnx_l2_next_out(ZtnxStack *s, uint8_t *buf, size_t cap, uint64_t *dst_mac, uint32_t *ethertype);
+
+// ---- Overlay sockets (network side) ------------------------------------------
+// Non-blocking. Ids are > 0; errors are negative ZTNX_E* codes. Call between
+// begin and end (ztnx_net_udp_recvfrom, readiness and the address getters
+// need neither).
 
 #define ZTNX_EAGAIN (-1)
 #define ZTNX_ENOTCONN (-2)
@@ -193,24 +154,24 @@ size_t ztnx_engine_peers(ZtnxEngine *e, ZtnxPeerInfo *out, size_t max);
 #define ZTNX_WRITABLE 2u
 #define ZTNX_HUP 4u
 
-int32_t ztnx_net_tcp_connect(ZtnxEngine *e, const ZtnxAddr *dst);
-int32_t ztnx_net_tcp_listen(ZtnxEngine *e, uint16_t port, uint32_t backlog);
-int32_t ztnx_net_tcp_accept(ZtnxEngine *e, int32_t id, ZtnxAddr *peer);
-int32_t ztnx_net_send(ZtnxEngine *e, int32_t id, const uint8_t *data, size_t len);
-int32_t ztnx_net_recv(ZtnxEngine *e, int32_t id, uint8_t *buf, size_t len);
-int32_t ztnx_net_shutdown(ZtnxEngine *e, int32_t id);
-int32_t ztnx_net_udp_bind(ZtnxEngine *e, uint16_t port);
-int32_t ztnx_net_udp_sendto(ZtnxEngine *e, int32_t id, const uint8_t *data, size_t len, const ZtnxAddr *dst);
-int32_t ztnx_net_udp_recvfrom(ZtnxEngine *e, int32_t id, uint8_t *buf, size_t len, ZtnxAddr *src);
-uint32_t ztnx_net_readiness(ZtnxEngine *e, int32_t id);
+int32_t ztnx_net_tcp_connect(ZtnxStack *s, const ZtnxAddr *dst);
+int32_t ztnx_net_tcp_listen(ZtnxStack *s, uint16_t port, uint32_t backlog);
+int32_t ztnx_net_tcp_accept(ZtnxStack *s, int32_t id, ZtnxAddr *peer);
+int32_t ztnx_net_send(ZtnxStack *s, int32_t id, const uint8_t *data, size_t len);
+int32_t ztnx_net_recv(ZtnxStack *s, int32_t id, uint8_t *buf, size_t len);
+int32_t ztnx_net_shutdown(ZtnxStack *s, int32_t id);
+int32_t ztnx_net_udp_bind(ZtnxStack *s, uint16_t port);
+int32_t ztnx_net_udp_sendto(ZtnxStack *s, int32_t id, const uint8_t *data, size_t len, const ZtnxAddr *dst);
+int32_t ztnx_net_udp_recvfrom(ZtnxStack *s, int32_t id, uint8_t *buf, size_t len, ZtnxAddr *src);
+uint32_t ztnx_net_readiness(ZtnxStack *s, int32_t id);
 // Bytes of overlay socket buffers in use (TCP buffers, queued datagrams).
-size_t ztnx_net_buffer_usage(ZtnxEngine *e);
+size_t ztnx_net_buffer_usage(ZtnxStack *s);
 // Most bytes of overlay socket buffers allowed at once (new TCP connections
 // get smaller buffers as it fills; past it they fail with ZTNX_ENOBUFS).
-void ztnx_net_set_budget(ZtnxEngine *e, size_t bytes);
-void ztnx_net_close(ZtnxEngine *e, int32_t id);
-int32_t ztnx_net_local_addr(ZtnxEngine *e, int32_t id, ZtnxAddr *out);
-int32_t ztnx_net_peer_addr(ZtnxEngine *e, int32_t id, ZtnxAddr *out);
+void ztnx_net_set_budget(ZtnxStack *s, size_t bytes);
+void ztnx_net_close(ZtnxStack *s, int32_t id);
+int32_t ztnx_net_local_addr(ZtnxStack *s, int32_t id, ZtnxAddr *out);
+int32_t ztnx_net_peer_addr(ZtnxStack *s, int32_t id, ZtnxAddr *out);
 
 // Must be provided by the embedding program on no_std targets. Called with a
 // (non NUL-terminated) panic message; must not return.

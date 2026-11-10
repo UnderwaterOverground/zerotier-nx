@@ -99,7 +99,7 @@ zt-host: zerotier-patches
 # worktree, where the submodule is empty: make zt-selftest ZT=<main checkout>/third_party/ZeroTierOne)
 .PHONY: zt-selftest
 zt-selftest: zt-host
-	$(CC) -c -Inative/zt native/host/zt_selftest.c -o target/zt_selftest.o
+	$(CC) -c -Inative/zt -Icrates/ztnx-ffi/include native/host/zt_selftest.c -o target/zt_selftest.o
 	$(CXX) -o target/zt-selftest target/zt_selftest.o target/zt-host/libztcore.a
 	target/zt-selftest
 

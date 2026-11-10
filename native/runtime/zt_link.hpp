@@ -28,6 +28,9 @@ struct ZtLinkConfig {
     // event (ZTNX_EVENT_*).
     std::function<void(const ZtnxNetConfig &)> on_config;
     std::function<void(uint32_t)> on_event;
+    // Wall-clock time now, in milliseconds since the Unix epoch, where the C
+    // library's clock can't be trusted (the console); 0 to use time().
+    int64_t wall_ms = 0;
 };
 
 class ZtLink {

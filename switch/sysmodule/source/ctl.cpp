@@ -12,8 +12,7 @@
     AMS_SF_METHOD_INFO(C, H, 2, Result, GetLastError, (const sf::OutBuffer &msg, sf::Out<u32> out_len),       (msg, out_len))          \
     AMS_SF_METHOD_INFO(C, H, 3, Result, Stop,         (sf::Out<u32> out_code, sf::Out<u32> out_detail),       (out_code, out_detail))  \
     AMS_SF_METHOD_INFO(C, H, 4, Result, GetPeers,     (const sf::OutBuffer &peers, sf::Out<u32> out_count),   (peers, out_count))      \
-    AMS_SF_METHOD_INFO(C, H, 5, Result, GetConfName,  (const sf::OutBuffer &name, sf::Out<u32> out_len),      (name, out_len))         \
-    AMS_SF_METHOD_INFO(C, H, 6, Result, SetConf,      (const sf::InBuffer &name, sf::Out<u32> out_code),      (name, out_code))
+    AMS_SF_METHOD_INFO(C, H, 5, Result, GetNetworkName, (const sf::OutBuffer &name, sf::Out<u32> out_len),    (name, out_len))
 
 AMS_SF_DEFINE_INTERFACE(ams::ctl, ICtl, ZTNX_CTL_INTERFACE_INFO, 0x7767636C)
 
@@ -22,7 +21,6 @@ namespace ams::ctl {
     namespace {
 
         constinit StopHandler g_stop = nullptr;
-        constinit ConfHandler g_conf = nullptr;
 
     }
 
@@ -52,24 +50,14 @@ namespace ams::ctl {
             }
 
             Result GetPeers(const sf::OutBuffer &peers, sf::Out<u32> out_count) {
-                const size_t n = status::GetPeers(reinterpret_cast<::ZtnxPeerInfo *>(peers.GetPointer()), peers.GetSize() / sizeof(::ZtnxPeerInfo));
+                const size_t n = status::GetPeers(reinterpret_cast<::ZtnxCtlPeer *>(peers.GetPointer()), peers.GetSize() / sizeof(::ZtnxCtlPeer));
                 out_count.SetValue(static_cast<u32>(n));
                 R_SUCCEED();
             }
 
-            Result GetConfName(const sf::OutBuffer &name, sf::Out<u32> out_len) {
-                const size_t n = status::GetConfName(reinterpret_cast<char *>(name.GetPointer()), name.GetSize());
+            Result GetNetworkName(const sf::OutBuffer &name, sf::Out<u32> out_len) {
+                const size_t n = status::GetNetworkName(reinterpret_cast<char *>(name.GetPointer()), name.GetSize());
                 out_len.SetValue(static_cast<u32>(n));
-                R_SUCCEED();
-            }
-
-            Result SetConf(const sf::InBuffer &name, sf::Out<u32> out_code) {
-                char buf[ZTNX_CTL_CONF_NAME_MAX];
-                const size_t n = std::min(name.GetSize(), sizeof buf - 1);
-                std::memcpy(buf, name.GetPointer(), n);
-                buf[n] = 0;
-                buf[std::strcspn(buf, "\r\n")] = 0;
-                out_code.SetValue(g_conf ? g_conf(buf) : static_cast<u32>(ZTNX_CTL_CONF_BUSY));
                 R_SUCCEED();
             }
     };
@@ -84,7 +72,7 @@ namespace ams::ctl {
         constinit sf::UnmanagedServiceObject<ICtl, CtlService> g_ctl_object;
 
         // SetPaused and Stop wait (a few seconds at most) for the engine loop
-        // and other threads; SetConf parses a .conf in the engine.
+        // and other threads.
         alignas(os::ThreadStackAlignment) constinit u8 g_thread_stack[0x4000];
         constinit os::ThreadType g_thread;
 
@@ -94,9 +82,8 @@ namespace ams::ctl {
 
     }
 
-    bool Start(StopHandler stop, ConfHandler conf) {
+    bool Start(StopHandler stop) {
         g_stop = stop;
-        g_conf = conf;
         // Started from the overlay right after a stop, sm may not yet have
         // dropped the old process's registration: retry for a moment.
         Result rc = ResultSuccess();

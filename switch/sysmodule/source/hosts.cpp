@@ -138,12 +138,30 @@ namespace ams::hosts {
         // (VSock::AliasFor) and tells the socket layer about them. Never our
         // own address, a stand-in that collides with another or falls in a
         // tunnel route, or more than VSock::MaxAliases.
-        void Alias(ZtnxEngine *engine, char *lines, size_t cap) {
+        void Alias(const ZtnxNetConfig &net, char *lines, size_t cap) {
             auto out = std::make_unique<char[]>(cap);
+            // The network's routes, as the socket layer has them (see
+            // ZtLink::Apply): our subnets and the managed routes.
             auto routes = std::make_unique<ZtnxPrefix[]>(::ztnx::VSock::MaxRoutes);
-            const size_t n_routes = std::min(ztnx_engine_routes(engine, routes.get(), ::ztnx::VSock::MaxRoutes), ::ztnx::VSock::MaxRoutes);
-            ZtnxPrefix own[4];
-            const size_t n_own = std::min<size_t>(ztnx_engine_addresses(engine, own, 4), 4);
+            size_t n_routes = 0;
+            auto add = [&](const u8 ip[4], u8 len) {
+                if (n_routes >= ::ztnx::VSock::MaxRoutes || len == 0) return;
+                ZtnxPrefix &p = routes[n_routes++];
+                std::memset(std::addressof(p), 0, sizeof p);
+                p.family = 4;
+                p.len = len;
+                std::memcpy(p.ip, ip, 4);
+            };
+            for (unsigned i = 0; i < net.n_addrs; i++) add(net.addrs[i].ip, net.addrs[i].prefix);
+            for (unsigned i = 0; i < net.n_routes; i++) add(net.routes[i].target, net.routes[i].prefix);
+            ZtnxPrefix own[ZTNX_MAX_ADDRS];
+            const size_t n_own = net.n_addrs;
+            for (unsigned i = 0; i < net.n_addrs; i++) {
+                std::memset(std::addressof(own[i]), 0, sizeof own[i]);
+                own[i].family = 4;
+                own[i].len = 32;
+                std::memcpy(own[i].ip, net.addrs[i].ip, 4);
+            }
             auto in_prefix = [](u32 ip, const ZtnxPrefix &p) {
                 if (p.family != 4 || p.len > 32) return false;
                 u32 net;
@@ -193,12 +211,13 @@ namespace ams::hosts {
 
     }
 
-    bool Collect(ZtnxEngine *engine, bool aliases) {
+    bool Collect(const char *names, const ZtnxNetConfig &net, bool aliases) {
         // Runs rarely: working buffers come from the heap, not static memory.
         auto lines = std::make_unique<char[]>(MaxBlock);
         auto block = std::make_unique<char[]>(MaxBlock);
-        ztnx_engine_hosts(engine, lines.get(), MaxBlock);
-        if (aliases) Alias(engine, lines.get(), MaxBlock);
+        util::SNPrintf(lines.get(), MaxBlock, "%s", names);
+        if (aliases) Alias(net, lines.get(), MaxBlock);
+        else ::ztnx::VSock::SetAliases(nullptr, 0);
         int count = 0;
         const size_t block_len = BuildBlock(lines.get(), block.get(), MaxBlock, std::addressof(count));
         const u64 hash = Hash(block.get(), block_len);

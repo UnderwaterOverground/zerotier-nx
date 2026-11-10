@@ -56,6 +56,7 @@ extern "C" {
 #include "log.hpp"
 #include "runtime.hpp"
 #include "vsock.hpp"
+#include "zt_link.hpp"
 #include "stack_watch.hpp"
 #include "heap_size.h"
 #include "memory.hpp"
@@ -67,9 +68,16 @@ namespace ams {
 
         constexpr const char ConfigDir[] = "sdmc:/config/zerotier-nx";
         constexpr const char ConfigPath[] = "sdmc:/config/zerotier-nx/config.ini";
-        // A .conf is a few hundred bytes; 32 peers with names fit easily.
-        constexpr size_t ConfMaxSize = 8_KB;
-        constexpr const char DefaultConf[] = "wg0.conf";
+        // ZeroTier's state: this console's identity (its node ID and keys)
+        // and the network's last configuration.
+        constexpr const char IdentitySecretPath[] = "sdmc:/config/zerotier-nx/identity.secret";
+        constexpr const char IdentityPublicPath[] = "sdmc:/config/zerotier-nx/identity.public";
+        constexpr const char NetworksDir[] = "sdmc:/config/zerotier-nx/networks.d";
+        // Making an identity borrows 2 MB from the system once. Not while the
+        // console is still starting up: this long after power-on at the
+        // earliest, and only with this much free.
+        constexpr u64 IdentityAfterBootNs = 120'000'000'000ull;
+        constexpr u64 IdentityMinFree = 3_MB;
         constexpr const char DisabledPath[] = "sdmc:/config/zerotier-nx/disabled";
         // Why we didn't start this time (too little system memory), for the
         // overlay; removed once we do start.
@@ -106,16 +114,16 @@ namespace ams {
         static_assert(MallocBufferSize % os::MemoryPageSize == 0);
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
 
-        // The engine's own sockets: the update check (TCP); WireGuard, DNS,
+        // The engine's own sockets: the update check (TCP); ZeroTier's, DNS,
         // the runtime's wake pair and the log (UDP). The
         // transfer memory is the buffer pool for all of them: each socket's
         // buffers are taken from it, and one that doesn't fit fails with
         // ENOBUFS. UDP sockets start with a small receive buffer, as only
-        // WireGuard's needs to be big, and it grows its own
+        // ZeroTier's needs to be big, and it grows its own
         // (ztnx_driver.c): at 48 KB each, the small sockets took so much
-        // that once WireGuard had grown, a new DNS socket didn't fit. The
+        // that once that one had grown, a new DNS socket didn't fit. The
         // pool keeps the size it had with 48 KB (sb_efficiency sockets'
-        // worth), so WireGuard gets what the small sockets no longer take.
+        // worth), so ZeroTier's gets what the small sockets no longer take.
         constexpr u32 UdpRxPoolShare = 0xC000;
         consteval size_t BsdTransferMemorySize(const ::SocketInitConfig &c) {
             const u32 sum = c.tcp_tx_buf_max_size + c.tcp_rx_buf_max_size + c.udp_tx_buf_size + UdpRxPoolShare;
@@ -314,32 +322,71 @@ namespace ams {
         // ---- config ------------------------------------------------------
 
         struct Config {
-            char conf[ZTNX_CTL_CONF_NAME_MAX] = {};  // the .conf to use (file name in ConfigDir)
+            char network[20] = {};  // the network to join: its 16 hex digit ID
+            char port[8] = {};      // ZeroTier's UDP port; default 9993
             char log_udp[64] = {};
             char mitm[32] = "homebrew";  // "homebrew,sys-ftpd" or "off"
             char mitm_titles[384] = {};  // forwarders' program IDs, served like homebrew
-            char hosts[8] = "on";        // peer names in Atmosphere's hosts file, or "off"
-            char aliases[8] = "on";      // private peer addresses named as 100.127.x.y stand-ins, or "off"
+            char hosts[8] = "on";        // host= names in Atmosphere's hosts file, or "off"
+            char aliases[8] = "on";      // private addresses named as 100.127.x.y stand-ins, or "off"
             char overlay_budget_kb[8] = {};  // tunnel socket buffers; default 320
             char connect_notice[8] = "on";   // toast with our address when first connected
             char update_check[8] = "on";     // ask GitHub for a newer release at boot
             char tunnel_lan[8] = {};         // "on": LAN addresses go through the tunnel too (tests)
         };
 
+        // Names for addresses on the network, from config.ini's
+        // "host = name a.b.c.d" lines, as "a.b.c.d name\n" lines (the form
+        // hosts::Collect takes). ZeroTier itself has no device names.
+        constinit char g_host_lines[2_KB] = {};
+
+        void AddHost(const char *value) {
+            // "name a.b.c.d" (no sscanf here: the sysmodule has no stdio).
+            char name[64] = {}, ip[20] = {};
+            const size_t name_len = std::strcspn(value, " \t");
+            const char *rest = value + name_len;
+            while (*rest == ' ' || *rest == '\t') rest++;
+            const size_t ip_len = std::strcspn(rest, " \t");
+            if (name_len == 0 || name_len >= sizeof name || ip_len == 0 || ip_len >= sizeof ip) {
+                Log("config: host = %s: expected a name and an IPv4 address", value);
+                return;
+            }
+            std::memcpy(name, value, name_len);
+            std::memcpy(ip, rest, ip_len);
+            if (inet_addr(ip) == INADDR_NONE) {
+                Log("config: host = %s: %s is not an IPv4 address", value, ip);
+                return;
+            }
+            const size_t used = std::strlen(g_host_lines);
+            const int n = util::SNPrintf(g_host_lines + used, sizeof g_host_lines - used, "%s %s\n", ip, name);
+            if (n < 0 || used + static_cast<size_t>(n) >= sizeof g_host_lines) {
+                g_host_lines[used] = 0;
+                Log("config: too many host= lines; %s left out", name);
+            }
+        }
+
         void LoadConfig(Config &c) {
-            static char buf[2_KB];  // config.ini is a few hundred bytes
+            static char buf[4_KB];  // config.ini is a few hundred bytes
             if (ReadWholeFile(ConfigPath, buf, sizeof buf) < 0) return;
             char *save = nullptr;
             for (char *line = strtok_r(buf, "\r\n", &save); line; line = strtok_r(nullptr, "\r\n", &save)) {
+                while (*line == ' ' || *line == '\t') line++;
                 if (line[0] == '#') continue;
                 char *eq = std::strchr(line, '=');
                 if (!eq) continue;
-                *eq = 0;
-                const char *v = eq + 1;
+                // "key=value" or "key = value".
+                char *key_end = eq;
+                while (key_end > line && (key_end[-1] == ' ' || key_end[-1] == '\t')) key_end--;
+                *key_end = 0;
+                char *v = eq + 1;
+                while (*v == ' ' || *v == '\t') v++;
+                for (char *end = v + std::strlen(v); end > v && (end[-1] == ' ' || end[-1] == '\t'); end--) end[-1] = 0;
                 auto set = [&](const char *key, char *dst, size_t cap) {
                     if (!std::strcmp(line, key)) util::SNPrintf(dst, cap, "%s", v);
                 };
-                set("conf", c.conf, sizeof c.conf);
+                if (!std::strcmp(line, "host")) AddHost(v);
+                set("network", c.network, sizeof c.network);
+                set("port", c.port, sizeof c.port);
                 set("log_udp", c.log_udp, sizeof c.log_udp);
                 set("mitm", c.mitm, sizeof c.mitm);
                 set("mitm_titles", c.mitm_titles, sizeof c.mitm_titles);
@@ -349,116 +396,6 @@ namespace ams {
                 set("connect_notice", c.connect_notice, sizeof c.connect_notice);
                 set("update_check", c.update_check, sizeof c.update_check);
                 set("tunnel_lan", c.tunnel_lan, sizeof c.tunnel_lan);
-            }
-        }
-
-        // Rewrites (or adds) `key=value` in config.ini, keeping the rest.
-        void SetConfigValue(const char *key, const char *value) {
-            static char buf[2_KB], out[2_KB];
-            const s64 n = ReadWholeFile(ConfigPath, buf, sizeof buf);
-            if (n < 0) buf[0] = 0;
-            size_t o = 0;
-            bool done = false;
-            const size_t klen = std::strlen(key);
-            for (const char *line = buf; *line;) {
-                const char *eol = std::strchr(line, '\n');
-                const size_t len = eol ? static_cast<size_t>(eol - line) + 1 : std::strlen(line);
-                if (std::strncmp(line, key, klen) == 0 && line[klen] == '=') {
-                    if (!done) o += util::SNPrintf(out + o, sizeof out - o, "%s=%s\n", key, value);
-                    done = true;
-                } else if (o + len < sizeof out) {
-                    std::memcpy(out + o, line, len);
-                    o += len;
-                }
-                line += len;
-            }
-            if (o && out[o - 1] != '\n' && o < sizeof out - 1) out[o++] = '\n';
-            if (!done) o += util::SNPrintf(out + o, sizeof out - o, "%s=%s\n", key, value);
-            if (!WriteWholeFile(ConfigPath, out, o)) Log("cannot write %s", ConfigPath);
-        }
-
-        // A .conf file name: just a name (no directories), ending in .conf.
-        bool ValidConfName(const char *name) {
-            const size_t n = std::strlen(name);
-            if (n < 6 || n >= ZTNX_CTL_CONF_NAME_MAX || std::strchr(name, '/') || std::strchr(name, '\\') || std::strstr(name, "..")) return false;
-            return std::strcmp(name + n - 5, ".conf") == 0;
-        }
-
-        // A config saved as wg0.conf.txt (Windows hides extensions) becomes
-        // wg0.conf, unless that exists already.
-        void RenameTxtConfs() {
-            constexpr int Max = 4;
-            char names[Max][ZTNX_CTL_CONF_NAME_MAX + 4] = {};
-            int found = 0;
-            fs::DirectoryHandle dir;
-            if (R_FAILED(fs::OpenDirectory(std::addressof(dir), ConfigDir, fs::OpenDirectoryMode_File))) return;
-            {
-                ON_SCOPE_EXIT { fs::CloseDirectory(dir); };
-                static fs::DirectoryEntry entry;
-                s64 got = 0;
-                while (found < Max && R_SUCCEEDED(fs::ReadDirectory(std::addressof(got), std::addressof(entry), dir, 1)) && got == 1) {
-                    const size_t n = std::strlen(entry.name);
-                    if (n > 9 && n < sizeof names[0] && strcasecmp(entry.name + n - 9, ".conf.txt") == 0)
-                        util::SNPrintf(names[found++], sizeof names[0], "%s", entry.name);
-                }
-            }
-            for (int i = 0; i < found; i++) {
-                char from[96], to[96];
-                util::SNPrintf(from, sizeof from, "%s/%s", ConfigDir, names[i]);
-                const size_t n = std::strlen(names[i]);
-                util::SNPrintf(to, sizeof to, "%s/%.*s.conf", ConfigDir, static_cast<int>(n - 9), names[i]);
-                if (!ValidConfName(std::strrchr(to, '/') + 1)) continue;
-                if (R_SUCCEEDED(fs::RenameFile(from, to))) Log("config: renamed %s to %s", names[i], std::strrchr(to, '/') + 1);
-                else Log("config: cannot rename %s (is there a .conf with that name already?)", names[i]);
-            }
-        }
-
-        // Which .conf to use: config.ini's, else the only one there is, else
-        // wg0.conf.
-        void SelectConf(const Config &cfg, char *out, size_t cap) {
-            if (cfg.conf[0]) {
-                util::SNPrintf(out, cap, "%s%s", cfg.conf, std::strstr(cfg.conf, ".conf") ? "" : ".conf");
-                return;
-            }
-            util::SNPrintf(out, cap, "%s", DefaultConf);
-            fs::DirectoryHandle dir;
-            if (R_FAILED(fs::OpenDirectory(std::addressof(dir), ConfigDir, fs::OpenDirectoryMode_File))) return;
-            ON_SCOPE_EXIT { fs::CloseDirectory(dir); };
-            static fs::DirectoryEntry entry;  // ~0x310 bytes: not on the stack
-            char only[ZTNX_CTL_CONF_NAME_MAX] = {};
-            int found = 0;
-            s64 got = 0;
-            while (R_SUCCEEDED(fs::ReadDirectory(std::addressof(got), std::addressof(entry), dir, 1)) && got == 1) {
-                if (!ValidConfName(entry.name)) continue;
-                if (++found == 1) util::SNPrintf(only, sizeof only, "%s", entry.name);
-            }
-            if (found == 1) util::SNPrintf(out, cap, "%s", only);
-        }
-
-        // What to do when `name` isn't in the config folder, from what is:
-        // nothing, a .conf saved as .conf.txt (Windows hides extensions), or
-        // other .conf files to pick from.
-        void DescribeMissingConf(const char *name, char *out, size_t cap) {
-            int confs = 0;
-            char txt[ZTNX_CTL_CONF_NAME_MAX + 4] = {};
-            fs::DirectoryHandle dir;
-            if (R_SUCCEEDED(fs::OpenDirectory(std::addressof(dir), ConfigDir, fs::OpenDirectoryMode_File))) {
-                ON_SCOPE_EXIT { fs::CloseDirectory(dir); };
-                static fs::DirectoryEntry entry;
-                s64 got = 0;
-                while (R_SUCCEEDED(fs::ReadDirectory(std::addressof(got), std::addressof(entry), dir, 1)) && got == 1) {
-                    const size_t n = std::strlen(entry.name);
-                    if (ValidConfName(entry.name)) confs++;
-                    else if (!txt[0] && n > 9 && n < sizeof txt && strcasecmp(entry.name + n - 9, ".conf.txt") == 0)
-                        util::SNPrintf(txt, sizeof txt, "%s", entry.name);
-                }
-            }
-            if (confs > 0) {
-                util::SNPrintf(out, cap, "%s isn't in config/zerotier-nx. Pick one of the .conf files there under Config.", name);
-            } else if (txt[0]) {
-                util::SNPrintf(out, cap, "Rename %s to %.*s, then restart the Switch.", txt, static_cast<int>(std::strlen(txt) - 4), txt);
-            } else {
-                util::SNPrintf(out, cap, "No .conf in config/zerotier-nx. Copy your WireGuard config there and restart.");
             }
         }
 
@@ -544,7 +481,7 @@ namespace ams {
         constinit u64 g_update_check_at_ns = 0;  // 0: counted from the next tick
         constinit ZtnxUpdate *g_update = nullptr;
 
-        // Engine loop, runtime lock held. Only the start blocks (DNS lookup).
+        // Engine loop's tick. Only the start blocks (DNS lookup).
         void StepUpdateCheck(u64 now) {
             if (!g_update_check) return;
             if (!g_update) {
@@ -602,18 +539,6 @@ namespace ams {
             status::AnnounceLowMemory(static_cast<u32>(low / 1024));
         }
 
-        const char *EventName(u32 kind) {
-            switch (kind) {
-                case ZTNX_EVENT_ADDRESSES: return "addresses";
-                case ZTNX_EVENT_PEERS: return "peers";
-                case ZTNX_EVENT_ERROR: return "error";
-                case ZTNX_EVENT_RESOLVE: return "resolve";
-                case ZTNX_EVENT_HANDSHAKE: return "handshake";
-                case ZTNX_EVENT_PEER_LOST: return "peer-lost";
-                default: return "log";
-            }
-        }
-
         void SetUpUdpLog(const char *target) {
             char host[48];
             const char *colon = std::strchr(target, ':');
@@ -626,8 +551,8 @@ namespace ams {
             g_log_udp_addr.sin_addr.s_addr = inet_addr(host);
         }
 
-        // Once the tunnel's routes are known: a tunnel address gets its lines
-        // through the engine, anything else a real socket.
+        // Once the network's routes are known: an address on it gets its
+        // lines through the stack, anything else a real socket.
         void StartUdpLog() {
             if (g_log_udp_addr.sin_family != AF_INET) return;
             const bool tunnel = ::ztnx::VSock::IsTunnel(reinterpret_cast<const sockaddr *>(std::addressof(g_log_udp_addr)));
@@ -653,10 +578,10 @@ namespace ams {
             g_log_udp_fd = fd;
         }
 
-        // Sends queued log lines through the tunnel (engine loop, runtime lock
-        // held). Waits while we're not on the tunnel; lines from boot are
-        // kept (the oldest dropped if the queue fills).
-        void FlushTunnelLog(ZtnxEngine *engine) {
+        // Sends queued log lines through the network (engine loop's tick).
+        // Waits while we're not on it; lines from boot are kept (the oldest
+        // dropped if the queue fills).
+        void FlushTunnelLog(::ztnx::Runtime &rt) {
             static int32_t udp = 0;
             static char out[sizeof g_tunnel_log];
             if (!g_log_tunnel) return;
@@ -671,18 +596,20 @@ namespace ams {
                 std::memcpy(out, g_tunnel_log, len);
                 g_tunnel_log_len = 0;
             }
-            if (udp <= 0) udp = ztnx_net_udp_bind(engine, 0);
-            if (udp <= 0) return;
             ZtnxAddr dst = {};
             dst.family = 4;
             std::memcpy(dst.ip, &g_log_udp_addr.sin_addr.s_addr, 4);
             dst.port = ntohs(g_log_udp_addr.sin_port);
-            for (size_t off = 0; off < len;) {
-                const char *nl = static_cast<const char *>(std::memchr(out + off, '\n', len - off));
-                const size_t n = (nl ? static_cast<size_t>(nl - (out + off)) : len - off) + (nl ? 1 : 0);
-                ztnx_net_udp_sendto(engine, udp, reinterpret_cast<const u8 *>(out + off), n, &dst);
-                off += n;
-            }
+            rt.With([&](ZtnxStack *stack) {
+                if (udp <= 0) udp = ztnx_net_udp_bind(stack, 0);
+                if (udp <= 0) return;
+                for (size_t off = 0; off < len;) {
+                    const char *nl = static_cast<const char *>(std::memchr(out + off, '\n', len - off));
+                    const size_t n = (nl ? static_cast<size_t>(nl - (out + off)) : len - off) + (nl ? 1 : 0);
+                    ztnx_net_udp_sendto(stack, udp, reinterpret_cast<const u8 *>(out + off), n, &dst);
+                    off += n;
+                }
+            });
         }
 
         void CloseUdpLogSocket() {
@@ -711,135 +638,164 @@ namespace ams {
 
     namespace {
 
-        // ---- the tunnel's configuration ------------------------------------
+        // ---- ZeroTier's state on the SD card --------------------------------
 
-        constinit os::SdkMutex g_conf_mutex;
-        constinit char g_conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
+        bool StatePath(int type, u64 id, char *out, size_t cap) {
+            switch (type) {
+                case ZTNX_STATE_IDENTITY_SECRET:
+                    util::SNPrintf(out, cap, "%s", IdentitySecretPath);
+                    return true;
+                case ZTNX_STATE_IDENTITY_PUBLIC:
+                    util::SNPrintf(out, cap, "%s", IdentityPublicPath);
+                    return true;
+                case ZTNX_STATE_PLANET:
+                    util::SNPrintf(out, cap, "%s/planet", ConfigDir);
+                    return true;
+                case ZTNX_STATE_NETWORK_CONFIG:
+                    util::SNPrintf(out, cap, "%s/%016llx.conf", NetworksDir, static_cast<unsigned long long>(id));
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        // Engine thread, without the runtime lock (see ZtLinkConfig).
+        int StateGet(void *, int type, u64 id, void *buf, unsigned int cap) {
+            char path[96];
+            if (!StatePath(type, id, path, sizeof path)) return -1;
+            fs::FileHandle f;
+            if (R_FAILED(fs::OpenFile(std::addressof(f), path, fs::OpenMode_Read))) return -1;
+            ON_SCOPE_EXIT { fs::CloseFile(f); };
+            s64 size = 0;
+            if (R_FAILED(fs::GetFileSize(std::addressof(size), f)) || size < 0 || static_cast<u64>(size) > cap) return -1;
+            size_t got = 0;
+            if (R_FAILED(fs::ReadFile(std::addressof(got), f, 0, buf, static_cast<size_t>(size)))) return -1;
+            return static_cast<int>(got);
+        }
+
+        void StatePut(void *, int type, u64 id, const void *data, int len) {
+            char path[96];
+            if (!StatePath(type, id, path, sizeof path)) return;
+            status::EngineStep("writing ZeroTier's state");
+            if (len < 0) {
+                static_cast<void>(fs::DeleteFile(path));
+            } else {
+                if (type == ZTNX_STATE_NETWORK_CONFIG) static_cast<void>(fs::CreateDirectory(NetworksDir));
+                if (!WriteWholeFile(path, data, static_cast<size_t>(len))) Log("state: cannot write %s", path);
+            }
+            status::EngineStep(nullptr);
+        }
+
+        // ---- the identity ----------------------------------------------------
+
+        // The address of the identity on the card, or 0 if there is none (or
+        // what is there isn't one with its private key).
+        u64 LoadIdentity() {
+            static char text[ZTNX_IDENTITY_TEXT_MAX];
+            const s64 n = ReadWholeFile(IdentitySecretPath, text, sizeof text);
+            if (n <= 0) return 0;
+            text[std::strcspn(text, "\r\n \t")] = 0;
+            return ztnx_engine_identity_address(text);
+        }
+
+        // Makes this console's identity and stores it. The work needs 2 MB of
+        // scratch memory, which the sysmodule's own heap doesn't have: it is
+        // borrowed from the system for the few seconds this takes and given
+        // back. Returns the new address, or 0.
+        u64 CreateIdentity() {
+            if (const Result rc = os::SetMemoryHeapSize(ZTNX_IDENTITY_SCRATCH); R_FAILED(rc)) {
+                Log("identity: the system wouldn't lend 2 MB (0x%x)", rc.GetValue());
+                return 0;
+            }
+            ON_SCOPE_EXIT { static_cast<void>(os::SetMemoryHeapSize(0)); };
+            uintptr_t block = 0;
+            if (const Result rc = os::AllocateMemoryBlock(std::addressof(block), ZTNX_IDENTITY_SCRATCH); R_FAILED(rc)) {
+                Log("identity: cannot use the borrowed memory (0x%x)", rc.GetValue());
+                return 0;
+            }
+            static char secret[ZTNX_IDENTITY_TEXT_MAX], pub[ZTNX_IDENTITY_TEXT_MAX];
+            const u64 t0 = armTicksToNs(armGetSystemTick());
+            const u64 addr = ztnx_engine_generate_identity(reinterpret_cast<void *>(block), secret, pub);
+            const u64 took_ms = (armTicksToNs(armGetSystemTick()) - t0) / 1'000'000;
+            os::FreeMemoryBlock(block, ZTNX_IDENTITY_SCRATCH);
+            if (!addr) {
+                Log("identity: generation failed");
+                return 0;
+            }
+            if (!WriteWholeFile(IdentitySecretPath, secret, std::strlen(secret))) {
+                Log("identity: cannot write %s", IdentitySecretPath);
+                return 0;
+            }
+            static_cast<void>(WriteWholeFile(IdentityPublicPath, pub, std::strlen(pub)));
+            Log("identity: created %010llx in %llu ms", static_cast<unsigned long long>(addr), static_cast<unsigned long long>(took_ms));
+            return addr;
+        }
+
+        // Returns this console's ZeroTier address: the identity on the card,
+        // or a new one, made once the console has finished starting up and
+        // has the memory to spare. Until then it waits here (also for an
+        // identity.secret made on a PC to appear).
+        u64 EnsureIdentity() {
+            if (const u64 addr = LoadIdentity()) return addr;
+            Log("identity: none yet; one is made %llu s after power-on, when %llu MB of system memory is free",
+                static_cast<unsigned long long>(IdentityAfterBootNs / 1'000'000'000ull), static_cast<unsigned long long>(IdentityMinFree / 1_MB));
+            u64 next_try = 0;
+            bool told = false;
+            for (u32 round = 0;; round++) {
+                const u64 now = armTicksToNs(armGetSystemTick());  // counts from power-on
+                WatchBootMemory(now);
+                if (round % 5 == 4) {
+                    if (const u64 addr = LoadIdentity()) return addr;
+                }
+                u64 free_bytes = 0, total = 0;
+                if (now >= IdentityAfterBootNs && now >= next_try && memory::SystemPool(&free_bytes, &total)) {
+                    if (free_bytes >= IdentityMinFree) {
+                        Log("identity: making one (system memory free: %lu KB)", static_cast<unsigned long>(free_bytes / 1024));
+                        if (const u64 addr = CreateIdentity()) return addr;
+                        next_try = now + 30'000'000'000ull;
+                    } else if (!told && now >= IdentityAfterBootNs + 60'000'000'000ull) {
+                        told = true;
+                        Log("identity: only %lu KB of system memory is free; waiting for %lu KB", static_cast<unsigned long>(free_bytes / 1024),
+                            static_cast<unsigned long>(IdentityMinFree / 1024));
+                        status::SetConfigError("Not enough free memory to create this Switch's ZeroTier identity. Turn off another sysmodule, or make one on a "
+                                               "PC (zerotier-idtool generate) and copy identity.secret to config/zerotier-nx.");
+                    }
+                }
+                os::SleepThread(TimeSpan::FromSeconds(1));
+            }
+        }
+
+        // ---- the network -------------------------------------------------------
+
         constinit bool g_hosts_on = true;
         constinit bool g_aliases_on = true;
         constinit std::atomic<bool> g_hosts_due = false;  // Collect() ran; Write() pending
 
-        // Loads config/zerotier-nx/<name> into the engine (directly at boot,
-        // through the runtime once it runs), tells the MITM and the hosts
-        // file, and records the outcome for the overlay. Returns ZTNX_CTL_CONF_*.
-        u32 ApplyConf(const char *name, ZtnxEngine *engine, ::ztnx::Runtime *rt) {
-            std::scoped_lock lk(g_conf_mutex);
-            if (!ValidConfName(name)) return ZTNX_CTL_CONF_NOT_FOUND;
-            char path[128];
-            util::SNPrintf(path, sizeof path, "%s/%s", ConfigDir, name);
-            auto text = std::make_unique<char[]>(ConfMaxSize);
-            const s64 len = ReadWholeFile(path, text.get(), ConfMaxSize);
-            if (len < 0) {
-                char what[160];
-                DescribeMissingConf(name, what, sizeof what);
-                Log("config: %s: not found (or over %zu KB). %s", path, ConfMaxSize / 1024, what);
-                // From the overlay's Config page the file was there a moment
-                // ago, and the running config stays: only a boot has none.
-                if (!rt) status::SetConfMissing(what);
-                return ZTNX_CTL_CONF_NOT_FOUND;
+        const char *NetStatusName(u32 status) {
+            switch (status) {
+                case ZTNX_NET_REQUESTING: return "asking the controller";
+                case ZTNX_NET_OK: return "up";
+                case ZTNX_NET_ACCESS_DENIED: return "not authorized";
+                case ZTNX_NET_NOT_FOUND: return "not found";
+                case ZTNX_NET_PORT_ERROR: return "port error";
+                case ZTNX_NET_CLIENT_TOO_OLD: return "client too old";
+                case ZTNX_NET_AUTH_REQUIRED: return "single sign-on required";
+                case ZTNX_NET_DOWN: return "down";
+                default: return "?";
             }
-            ZtnxConfig wc = {};
-            wc.conf = text.get();
-            wc.conf_len = static_cast<size_t>(len);
-            static char err[160];
-            static ZtnxPrefix routes[::ztnx::VSock::MaxRoutes];  // 64 * 24 bytes: static, not stack
-            size_t n_routes = 0;
-            u32 peers = 0;
-            auto load = [&](ZtnxEngine *e) {
-                if (!ztnx_engine_reload(e, &wc, ztnx_driver_now_ns(), err, sizeof err)) return false;
-                n_routes = ztnx_engine_routes(e, routes, ::ztnx::VSock::MaxRoutes);
-                static ZtnxPeerInfo info[ZTNX_CTL_MAX_PEERS];
-                peers = static_cast<u32>(ztnx_engine_peers(e, info, ZTNX_CTL_MAX_PEERS));
-                if (g_hosts_on) g_hosts_due = hosts::Collect(e, g_aliases_on) || g_hosts_due.load();
-                return true;
-            };
-            const bool ok = rt ? rt->With(load) : load(engine);
-            if (!ok) {
-                Log("config: %s: %s", name, err);
-                status::SetConfError(name, err);
-                return ZTNX_CTL_CONF_INVALID;
-            }
-            ::ztnx::VSock::SetRoutes(routes, std::min(n_routes, ::ztnx::VSock::MaxRoutes));
-            util::SNPrintf(g_conf_name, sizeof g_conf_name, "%s", name);
-            status::SetConf(name, peers);
-            ZtnxPrefix addr[1];
-            const bool have_addr = ztnx_engine_addresses(engine, addr, 1) > 0 && addr[0].family == 4;
-            u32 addr_be = 0;
-            if (have_addr) std::memcpy(&addr_be, addr[0].ip, 4);
-            Log("config: %s: %u peer(s), address %s, tunnel routes %zu%s", name, peers, have_addr ? inet_ntoa(in_addr{addr_be}) : "(none)",
-                n_routes, n_routes > ::ztnx::VSock::MaxRoutes ? " (only the first 64 are used)" : "");
+        }
+
+        // ZeroTier reported the network's status or configuration (engine
+        // thread, no lock held; the stack and the socket layer's routes have
+        // been updated already).
+        void OnNetwork(const ZtnxNetConfig &c) {
+            char ip[24] = "none";
+            if (c.n_addrs) util::SNPrintf(ip, sizeof ip, "%u.%u.%u.%u/%u", c.addrs[0].ip[0], c.addrs[0].ip[1], c.addrs[0].ip[2], c.addrs[0].ip[3], c.addrs[0].prefix);
+            Log("network %016llx: %s; address %s, mtu %u, %u route(s)%s%s", static_cast<unsigned long long>(c.nwid), NetStatusName(c.status), ip, c.mtu, c.n_routes,
+                c.truncated ? "; its configuration didn't all fit" : "", c.status == ZTNX_NET_OK && !c.broadcast ? "; broadcast is off (ARP won't work)" : "");
+            status::SetNetwork(c);
+            if (g_hosts_on && c.status == ZTNX_NET_OK && c.n_addrs) g_hosts_due = hosts::Collect(g_host_lines, c, g_aliases_on) || g_hosts_due.load();
             StartUdpLog();
-            return ZTNX_CTL_CONF_OK;
-        }
-
-        // Host names in Endpoint= lines: the engine asks (ZTNX_EVENT_RESOLVE,
-        // with the runtime lock held, where a lookup must not block), the
-        // loop looks them up between rounds without the lock, and answers
-        // on its next round.
-        struct Resolve {
-            u32 peer;
-            u16 port;
-            char host[96];
-        };
-        constinit os::SdkMutex g_resolve_mutex;
-        constinit Resolve g_resolve_asked[8] = {};
-        constinit int g_resolve_asked_n = 0;
-        constinit Resolve g_resolve_done[8] = {};
-        constinit u32 g_resolve_done_ip[8] = {};
-        constinit int g_resolve_done_n = 0;
-        constinit u64 g_resolve_last_ns[ZTNX_CTL_MAX_PEERS] = {};
-
-        void QueueResolve(const ZtnxEvent &ev) {
-            std::scoped_lock lk(g_resolve_mutex);
-            for (int i = 0; i < g_resolve_asked_n; i++)
-                if (g_resolve_asked[i].peer == ev.value) return;
-            if (g_resolve_asked_n == static_cast<int>(util::size(g_resolve_asked))) return;
-            Resolve &r = g_resolve_asked[g_resolve_asked_n++];
-            r.peer = ev.value;
-            r.port = ev.port;
-            util::SNPrintf(r.host, sizeof r.host, "%s", ev.text);
-        }
-
-        // Without the runtime lock: one lookup per round (up to 3 s), at most
-        // every 10 s per peer.
-        void ResolveOne() {
-            Resolve r;
-            {
-                std::scoped_lock lk(g_resolve_mutex);
-                if (g_resolve_asked_n == 0) return;
-                r = g_resolve_asked[0];
-                std::memmove(g_resolve_asked, g_resolve_asked + 1, sizeof(Resolve) * (g_resolve_asked_n - 1));
-                g_resolve_asked_n--;
-            }
-            const u64 now = armTicksToNs(armGetSystemTick());
-            if (r.peer < ZTNX_CTL_MAX_PEERS && g_resolve_last_ns[r.peer] && now - g_resolve_last_ns[r.peer] < 10'000'000'000ull) return;
-            if (r.peer < ZTNX_CTL_MAX_PEERS) g_resolve_last_ns[r.peer] = now;
-            u32 ip = 0;
-            bool ok = false;
-            Timed("endpoint lookup", [&] { ok = ResolveViaDns(r.host, &ip) == 0; });
-            if (!ok) {
-                Log("endpoint: %s: lookup failed (errno %d)", r.host, errno);
-                return;
-            }
-            std::scoped_lock lk(g_resolve_mutex);
-            if (g_resolve_done_n == static_cast<int>(util::size(g_resolve_done))) return;
-            g_resolve_done_ip[g_resolve_done_n] = ip;
-            g_resolve_done[g_resolve_done_n++] = r;
-        }
-
-        // With the runtime lock: hand the answers to the engine.
-        void ApplyResolved(ZtnxEngine *engine) {
-            std::scoped_lock lk(g_resolve_mutex);
-            for (int i = 0; i < g_resolve_done_n; i++) {
-                const Resolve &r = g_resolve_done[i];
-                ZtnxAddr a = {};
-                a.family = 4;
-                std::memcpy(a.ip, &g_resolve_done_ip[i], 4);
-                a.port = r.port;
-                Log("endpoint: peer %u = %s -> %s:%u", r.peer, r.host, inet_ntoa(in_addr{g_resolve_done_ip[i]}), r.port);
-                ztnx_engine_set_peer_endpoint(engine, r.peer, &a, ztnx_driver_now_ns());
-            }
-            g_resolve_done_n = 0;
         }
 
         // ---- sleep / wake ----------------------------------------------------
@@ -1156,18 +1112,6 @@ namespace ams {
             __builtin_unreachable();
         }
 
-        constinit ZtnxEngine *g_engine = nullptr;
-
-        // ztnx:ctl SetConf, on the ctl thread: switch to another .conf and
-        // make it the default for the next boot.
-        u32 SetConfForOverlay(const char *name) {
-            if (g_stopping || g_stop_failed || !g_runtime || !g_engine || status::IsStopping()) return ZTNX_CTL_CONF_BUSY;
-            Log("config: switching to %s (from the overlay)", name);
-            const u32 rc = ApplyConf(name, g_engine, g_runtime);
-            if (rc == ZTNX_CTL_CONF_OK) SetConfigValue("conf", name);
-            return rc;
-        }
-
     }
 
     void Main() {
@@ -1237,10 +1181,6 @@ namespace ams {
             }
         }
         ztnx_seed_rng(seed);
-        if (const u32 st = ztnx_selftest(); st != ZTNX_SELFTEST_OK) {
-            Log("crypto selftest FAILED (%u); not starting", st);
-            return;
-        }
         // ZeroTier's core throws and catches C++ exceptions, which Atmosphère's
         // default link turns into aborts. Make sure this build's link didn't.
         if (const u32 st = ztnx_engine_selftest(); st != 0) {
@@ -1265,8 +1205,8 @@ namespace ams {
         SetLocalNet(ip);
 
         // Consoles often have wrong clocks (dead RTC, Nintendo's NTP blocked):
-        // TLS needs a plausible date, and so does WireGuard (handshake
-        // timestamps must never go backwards, or peers ignore us).
+        // TLS (the update check) needs a plausible date, and ZeroTier's own
+        // clock starts from it.
         bool corrected = false;
         const u64 console_time = ConsoleUnixTime();
         u64 unix_time = ztnx_sane_unix_time(console_time, ZTNX_UPDATE_HOST, &corrected);
@@ -1274,60 +1214,85 @@ namespace ams {
                            static_cast<unsigned long long>(console_time), ZTNX_UPDATE_HOST, static_cast<unsigned long long>(unix_time));
         if (unix_time == 0) unix_time = console_time;
 
-        ZtnxEngine *engine = ztnx_engine_new(ztnx_driver_now_ns(), unix_time);
-        g_engine = engine;
+        ztnx_set_unix_time(unix_time);
         g_hosts_on = std::strcmp(cfg.hosts, "off") != 0;
         g_aliases_on = std::strcmp(cfg.aliases, "off") != 0;
         if (std::strcmp(cfg.tunnel_lan, "on") == 0) {
-            Log("tunnel_lan=on: LAN addresses go through the tunnel too (testing)");
+            Log("tunnel_lan=on: LAN addresses go through the network too (testing)");
             ::ztnx::VSock::SetTunnelLan(true);
         }
-        char conf_name[ZTNX_CTL_CONF_NAME_MAX];
-        RenameTxtConfs();
-        SelectConf(cfg, conf_name, sizeof conf_name);
-        // A broken or missing .conf isn't fatal: the overlay shows why and
-        // offers the others.
-        ApplyConf(conf_name, engine, nullptr);
+        // Without a network to join there is nothing to do but say so: the
+        // rest still starts, so the overlay can show it.
+        char *nwid_end = nullptr;
+        u64 nwid = std::strtoull(cfg.network, &nwid_end, 16);
+        if (std::strlen(cfg.network) != 16 || *nwid_end || nwid == 0) {
+            nwid = 0;
+            Log("config: no network= (16 hex digits) in %s; nothing to join", ConfigPath);
+            status::SetConfigError("Add network=<your 16-digit network ID> to config/zerotier-nx/config.ini and restart.");
+        }
+        // First boot: this waits until the console has settled, then makes
+        // the identity (see EnsureIdentity).
+        const u64 node = EnsureIdentity();
         StartUdpLog();
         FlushEarlyLog();
-        // Events arrive with the runtime lock held.
-        ZtnxDriver *driver = ztnx_driver_new(engine, [](void *, const ZtnxEvent *ev) {
-            if (ev->kind == ZTNX_EVENT_RESOLVE) QueueResolve(*ev);
-            else Log("%s: %s (%u)", EventName(ev->kind), ev->text, ev->value);
-            status::OnEvent(*ev);
-        }, engine);
-        ztnx_driver_resolve_inline(driver, 0);  // lookups happen off the lock (ResolveOne)
+
+        ZtnxDriver *driver = ztnx_driver_new();
+        ZtnxStack *stack = ztnx_stack_new(ztnx_driver_now_ns());
+        if (!driver || !stack) {
+            Log("out of memory; not starting");
+            return;
+        }
         if (cfg.overlay_budget_kb[0]) {
-            // Bounded by the sysmodule's heap (heap_size.h): the engine and
-            // the MITM need about 300 KB of it besides the overlay buffers.
+            // Bounded by the sysmodule's heap (heap_size.h), most of which
+            // ZeroTier's core needs.
             const unsigned long kb = std::clamp(std::strtoul(cfg.overlay_budget_kb, nullptr, 10), 128ul, 384ul);
-            ztnx_net_set_budget(engine, kb * 1024);
+            ztnx_net_set_budget(stack, kb * 1024);
             Log("overlay buffer budget: %lu KB", kb);
         }
-        const u16 listen_port = ztnx_engine_listen_port(engine);
-        if (ztnx_driver_open_udp(driver, listen_port) != 0 && ztnx_driver_open_udp(driver, 0) != 0) {
+        const u16 want_port = cfg.port[0] ? static_cast<u16>(std::strtoul(cfg.port, nullptr, 10)) : 9993;
+        if (ztnx_driver_open_udp(driver, want_port) != 0 && ztnx_driver_open_udp(driver, 0) != 0) {
             Log("no UDP socket (errno %d); not starting", errno);
             return;
         }
-        Log("udp: port %u%s", ztnx_driver_udp_port(driver), listen_port && ztnx_driver_udp_port(driver) != listen_port ? " (ListenPort was taken)" : "");
+        Log("udp: port %u%s", ztnx_driver_udp_port(driver), ztnx_driver_udp_port(driver) != want_port ? " (the usual one was taken)" : "");
+
         std::string error;
-        auto rt = ::ztnx::Runtime::Adopt(engine, driver, &error);
+        ::ztnx::ZtLinkConfig link_cfg;
+        link_cfg.state_get = StateGet;
+        link_cfg.state_put = StatePut;
+        link_cfg.on_config = OnNetwork;
+        link_cfg.on_event = [](u32 event) {
+            Log("zerotier: %s", event == ZTNX_EVENT_ONLINE ? "online (a root server answered)"
+                                : event == ZTNX_EVENT_OFFLINE ? "offline (no root server answers; is UDP blocked?)"
+                                                              : "another device is using this identity; delete identity.secret to make a new one");
+            status::OnEngineEvent(event);
+        };
+        link_cfg.wall_ms = static_cast<int64_t>(unix_time) * 1000;
+        int zt_rc = 0;
+        auto link = ::ztnx::ZtLink::Create(driver, std::move(link_cfg), &error, &zt_rc);
+        if (!link) {
+            Log("zerotier: %s (code %d); not starting", error.c_str(), zt_rc);
+            return;
+        }
+        auto rt = ::ztnx::Runtime::Create(stack, driver, link->Ops(), &error);
         if (!rt) {
             Log("runtime: %s (errno %d)", error.c_str(), errno);
             return;
         }
+        link->Attach(rt.get());
+        link->SetLocalIp(ip);
+        status::SetNode(link->Address(), nwid);
+        Log("zerotier: node %010llx%s", static_cast<unsigned long long>(link->Address()), link->Address() != node ? " (not the identity just read?)" : "");
+        if (nwid) {
+            Log("joining network %016llx", static_cast<unsigned long long>(nwid));
+            link->Join(nwid);
+        }
         Log("engine started");
 
-        // Homebrew sockets to tunnel addresses go through the engine.
+        // Homebrew sockets to addresses on the network go through the stack.
         // The log socket goes down and up with the engine's own (sleep).
         // Coming back counts as having been offline (see the loop below).
         g_update_check = std::strcmp(cfg.update_check, "off") != 0;
-        // Slow steps of the engine loop run after its tick, without the
-        // runtime lock (see Runtime::Run): the network check (nifm calls,
-        // 3-7 ms), the hosts file (most of a second) and log lines written
-        // to the SD card.
-        bool network_check_due = false, network_checked = false;
-        u32 network_ip = 0;
         rt->SetSuspendHooks([] {
             {
                 std::scoped_lock lk(g_log_mutex);
@@ -1335,8 +1300,7 @@ namespace ams {
             }
             CloseUdpLogSocket();
             SuspendUpdateCheck();
-        }, [&ip, &network_checked] {
-            network_checked = false;  // from before the sleep
+        }, [&ip] {
             g_tunnel_log_hold_until_ns = armTicksToNs(armGetSystemTick()) + 10'000'000'000ull;
             StartUdpLog();
             ip = 0;
@@ -1354,15 +1318,15 @@ namespace ams {
         // the engine loop's first round), then its control service.
         status::Initialize(*rt, (mitm ? ZTNX_CTL_FLAG_MITM : 0) | (g_hosts_on ? ZTNX_CTL_FLAG_HOSTS : 0),
                            std::strcmp(cfg.connect_notice, "off") != 0);
-        ctl::Start(StopForOverlay, SetConfForOverlay);
+        ctl::Start(StopForOverlay);
 
-        // Engine loop on this thread; housekeeping between rounds. Re-detect
+        // Engine loop on this thread; housekeeping between rounds, without
+        // the runtime lock (homebrew's sockets don't wait for it). Re-detect
         // our address after Wi-Fi changes (roaming, sleep/wake): every 5 s,
         // or 250 ms while offline (a wake usually finds Wi-Fi still down).
-        // Back online (or on a new address), every peer is contacted again at
-        // once and host names are resolved afresh.
+        // Back online (or on a new address) ZeroTier is told at once.
         u64 last_check = armTicksToNs(armGetSystemTick());
-        u64 last_heap_log = 0;
+        u64 last_heap_log = 0, last_peers = 0;
         const u64 started = armTicksToNs(armGetSystemTick());
         bool healthy = false;
         size_t heap_all_peak = 0;
@@ -1373,7 +1337,7 @@ namespace ams {
         }
         // The engine loop runs on core 2 when it can (see bsd_mitm::EngineCores).
         os::SetThreadCoreMask(os::GetCurrentThread(), bsd_mitm::PreferredCore, bsd_mitm::EngineCores);
-        rt->Run([&](ZtnxDriver *d) {
+        rt->Run([&] {
             const u64 now = armTicksToNs(armGetSystemTick());
             WatchBootMemory(now);
             // A round takes at most about a second (the poll timeout).
@@ -1382,11 +1346,16 @@ namespace ams {
             }
             g_last_round_ns = now;
             status::EngineRan(now);
-            static ZtnxPeerInfo peers[ZTNX_CTL_MAX_PEERS];  // 2.5 KB: static, not stack
-            status::SetPeers(peers, ztnx_engine_peers(engine, peers, ZTNX_CTL_MAX_PEERS));
-            ApplyResolved(engine);
-            // Whole-heap use (Rust, C++, C), sampled every round; the Rust
-            // peak below is exact.
+            // The peer list costs ZeroTier an allocation of about 2 KB a
+            // peer each time: not every round.
+            if (now - last_peers > 5'000'000'000ull) {
+                last_peers = now;
+                static ZtnxPeerInfo peers[ZTNX_CTL_MAX_PEERS];  // static, not stack
+                const size_t total = link->Peers(peers, ZTNX_CTL_MAX_PEERS);
+                status::SetPeers(peers, std::min<size_t>(total, ZTNX_CTL_MAX_PEERS), total);
+            }
+            // Whole-heap use (ZeroTier, Rust, C++, C), sampled every tick;
+            // the Rust peak below is exact.
             const size_t heap_free = init::GetAllocator()->GetTotalFreeSize();
             heap_all_peak = std::max(heap_all_peak, MallocBufferSize - std::min(heap_free, MallocBufferSize));
             if (!healthy && now - started > HealthyAfterNs) {
@@ -1398,16 +1367,29 @@ namespace ams {
                 last_heap_log = now;
                 size_t cur = 0, peak = 0;
                 ztnx_heap_stats(&cur, &peak);
+                ZtnxStackStats net = {};
+                const size_t buffers = rt->Read([&](ZtnxStack *st) {
+                    ztnx_stack_stats(st, &net);
+                    return ztnx_net_buffer_usage(st);
+                });
                 Log("heap: rust %zu KB (peak %zu), all %zu KB (peak %zu, largest free %zu) of %zu KB; overlay buffers %zu KB", cur / 1024,
                     peak / 1024, (MallocBufferSize - std::min(heap_free, MallocBufferSize)) / 1024, heap_all_peak / 1024,
-                    init::GetAllocator()->GetAllocatableSize() / 1024, MallocBufferSize / 1024, ztnx_net_buffer_usage(engine) / 1024);
+                    init::GetAllocator()->GetAllocatableSize() / 1024, MallocBufferSize / 1024, buffers / 1024);
                 char classes[200];
                 ztnx_heap_classes(classes, sizeof classes);
                 Log("heap by size (KB/allocs): %s", classes);
+                const auto zt = link->GetStats();
+                const auto loop = rt->GetStats();
+                Log("zerotier: datagrams in %llu out %llu (failed %llu), frames in %llu out %llu; arp broadcasts %u (held back %u), unresolved %u, "
+                    "unroutable %u; loop rounds %llu, wake-ups %llu",
+                    static_cast<unsigned long long>(zt.wire_in), static_cast<unsigned long long>(zt.wire_out),
+                    static_cast<unsigned long long>(zt.wire_out_failed), static_cast<unsigned long long>(zt.frames_in),
+                    static_cast<unsigned long long>(zt.frames_out), net.arp_broadcasts, net.arp_limited, net.unresolved, net.unroutable,
+                    static_cast<unsigned long long>(loop.rounds), static_cast<unsigned long long>(loop.wakes));
                 stack_watch::Log();
             }
             int bsd_errno = 0;
-            if (const int b = ztnx_driver_batched_receive(d, &bsd_errno); b != batched) {
+            if (const int b = ztnx_driver_batched_receive(driver, &bsd_errno); b != batched) {
                 batched = b;
                 if (b > 0) {
                     Log("udp: batched receive");
@@ -1415,31 +1397,22 @@ namespace ams {
                     Log("udp: one datagram per call (batched receive errno %d)", bsd_errno);
                 }
             }
-            FlushTunnelLog(engine);
+            FlushTunnelLog(*rt);
             Timed("update check", [&] { StepUpdateCheck(now); });
             if (now - last_check > (ip ? 5'000'000'000ull : 250'000'000ull)) {
                 last_check = now;
-                network_check_due = true;
-            }
-            if (network_checked) {
-                network_checked = false;
-                const u32 cur = network_ip;
+                u32 cur = 0;
+                Timed("network check", [&] { cur = NetworkUp() ? CurrentIp() : 0; });
                 status::SetOffline(cur == 0);
                 if (cur != ip) {
                     Log("local address changed: %s", cur ? inet_ntoa(in_addr{cur}) : "(offline)");
                     ip = cur;
                     SetLocalNet(cur);
-                    if (cur) ztnx_engine_network_up(engine, ztnx_driver_now_ns());
+                    link->SetLocalIp(cur);
+                    if (cur) link->NetworkChanged(cur);
                 }
             }
-        }, [&] {
-            if (network_check_due) {
-                network_check_due = false;
-                Timed("network check", [&] { network_ip = NetworkUp() ? CurrentIp() : 0; });
-                network_checked = true;
-            }
             if (g_hosts_due.exchange(false)) Timed("hosts file update", [] { hosts::Write(); });
-            ResolveOne();
             std::scoped_lock lk(g_log_mutex);
             EmitDeferredLog();
         });

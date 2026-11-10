@@ -6,6 +6,7 @@
 
 extern "C" {
 #include "ztnx.h"
+#include "ztnx_engine.h"
 }
 #include "ztnx_ctl.h"
 
@@ -34,28 +35,30 @@ namespace ams::status {
     // Whether the console has an internet connection (engine thread).
     void SetOffline(bool offline);
 
-    // A .conf was applied (name, peer count): CONNECTING until a handshake.
-    // Or it failed: the error is kept for the overlay, with a toast.
-    void SetConf(const char *name, u32 peers);
-    void SetConfError(const char *name, const char *error);
-    // No .conf to load: `message` says what to do (shown as it is).
-    void SetConfMissing(const char *message);
-    // Engine events (engine thread, runtime lock held).
-    void OnEvent(const ZtnxEvent &ev);
-    // Every peer (engine thread, every round): n is how many there are, of
-    // which up to ZTNX_CTL_MAX_PEERS are in peers.
-    void SetPeers(const ZtnxPeerInfo *peers, size_t n);
-
+    // Our ZeroTier address and the network config.ini names.
+    void SetNode(u64 node, u64 nwid);
+    // Something the user has to fix before anything can work (no network=
+    // in config.ini, no identity): kept for the overlay, with a toast.
+    void SetConfigError(const char *message);
+    // The network as ZeroTier reports it (engine thread, no lock held):
+    // CONNECTED once it is up with an address, with a toast the first time;
+    // a toast saying what to do when the controller refuses us.
+    void SetNetwork(const ZtnxNetConfig &c);
+    // ZTNX_EVENT_* from the engine.
+    void OnEngineEvent(u32 event);
+    // The peers ZeroTier knows (engine thread): n of them in peers, of
+    // `total` there are.
+    void SetPeers(const ZtnxPeerInfo *peers, size_t n, size_t total);
     ZtnxCtlStatus Get();
     size_t GetLastError(char *out, size_t cap);
-    size_t GetConfName(char *out, size_t cap);
+    size_t GetNetworkName(char *out, size_t cap);
     // Up to max of them into out; returns how many there are.
-    size_t GetPeers(ZtnxPeerInfo *out, size_t max);
+    size_t GetPeers(ZtnxCtlPeer *out, size_t max);
 
     // Pauses or resumes the tunnel (persisted). Not from the engine thread.
     void SetPaused(bool paused);
     bool IsPaused();
-    // A peer handshake has completed (not starting, unconfigured or paused).
+    // On the network with an address (not starting, refused or paused).
     bool IsConnected();
 
     // Stopped from the overlay: ZTNX_CTL_STOPPING from now on.

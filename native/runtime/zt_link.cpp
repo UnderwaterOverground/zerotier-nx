@@ -26,7 +26,7 @@ std::unique_ptr<ZtLink> ZtLink::Create(ZtnxDriver *driver, ZtLinkConfig cfg, std
     }
     link->driver_ = driver;
     link->cfg_ = std::move(cfg);
-    int64_t wall_ms = static_cast<int64_t>(time(nullptr)) * 1000;
+    int64_t wall_ms = link->cfg_.wall_ms ? link->cfg_.wall_ms : static_cast<int64_t>(time(nullptr)) * 1000;
     // A clock that was never set would give ZeroTier times near zero.
     if (wall_ms < 1600000000000LL) wall_ms = 1600000000000LL;
     link->epoch_base_ms_ = wall_ms - static_cast<int64_t>(ztnx_driver_now_ns() / 1000000);

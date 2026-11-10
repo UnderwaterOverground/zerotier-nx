@@ -31,11 +31,15 @@ namespace ams::status {
         constinit ::ztnx::Runtime *g_runtime = nullptr;
         constinit ZtnxCtlStatus g_status = {};
         constinit char g_last_error[192] = {};
-        constinit char g_conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
-        constinit ZtnxPeerInfo g_peers[ZTNX_CTL_MAX_PEERS] = {};
+        constinit char g_net_name[ZTNX_CTL_NAME_MAX] = {};
+        constinit ZtnxCtlPeer g_peers[ZTNX_CTL_MAX_PEERS] = {};
         constinit size_t g_peer_count = 0;  // in g_peers
-        constinit size_t g_peer_total = 0;  // configured, including any that didn't fit
-        constinit bool g_handshaken = false;  // a handshake since the conf was applied
+        constinit size_t g_peer_total = 0;  // known, including any that didn't fit
+        constinit bool g_net_ok = false;    // on the network, with an address
+        // What the last toast about joining was for (a net_status, or -1), so
+        // each change is announced once.
+        constinit int g_announced_net = -1;
+        constinit bool g_announced_truncated = false;
         constinit std::atomic<bool> g_paused = false;
         constinit bool g_connect_notice = true;   // config.ini connect_notice
         constinit bool g_announced_connected = false;  // once per boot
@@ -102,7 +106,7 @@ namespace ams::status {
 
         // The state while the tunnel is meant to be running (g_mutex held).
         u32 RunningState() {
-            return g_handshaken ? ZTNX_CTL_CONNECTED : ZTNX_CTL_CONNECTING;
+            return g_net_ok ? ZTNX_CTL_CONNECTED : ZTNX_CTL_CONNECTING;
         }
 
     }
@@ -123,91 +127,111 @@ namespace ams::status {
         }
     }
 
-    void SetConf(const char *name, u32 peers) {
+    void SetNode(u64 node, u64 nwid) {
         std::scoped_lock lk(g_mutex);
-        util::SNPrintf(g_conf_name, sizeof g_conf_name, "%s", name);
-        g_status.peers = peers;
-        g_status.peers_up = 0;
-        g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_CONF_ERROR | ZTNX_CTL_FLAG_CONF_MISSING);
-        g_last_error[0] = 0;
-        g_handshaken = false;
-        g_peer_count = g_peer_total = 0;
-        if (g_runtime && !g_paused && g_status.state != ZTNX_CTL_STOPPING) g_status.state = ZTNX_CTL_CONNECTING;
+        g_status.node = node;
+        g_status.nwid = nwid;
     }
 
-    void SetConfError(const char *name, const char *error) {
+    void SetConfigError(const char *message) {
         {
             std::scoped_lock lk(g_mutex);
             g_status.flags |= ZTNX_CTL_FLAG_CONF_ERROR;
-            g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_CONF_MISSING);
-            char msg[192];
-            util::SNPrintf(msg, sizeof msg, "%s: %s", name, error);
-            CopySafe(g_last_error, sizeof g_last_error, msg);
-            // What was running before (if anything) keeps running.
-        }
-        char text[220];
-        util::SNPrintf(text, sizeof text, "%s", g_last_error);
-        Toast(ConfigNotifyPath, "ZeroTier: config error", text, ConfigToastMs);
-    }
-
-    void SetConfMissing(const char *message) {
-        {
-            std::scoped_lock lk(g_mutex);
-            g_status.flags |= ZTNX_CTL_FLAG_CONF_ERROR | ZTNX_CTL_FLAG_CONF_MISSING;
             CopySafe(g_last_error, sizeof g_last_error, message);
         }
         char text[220];
         util::SNPrintf(text, sizeof text, "%s", g_last_error);
-        Toast(ConfigNotifyPath, "ZeroTier: no config", text, ConfigToastMs);
+        Toast(ConfigNotifyPath, "ZeroTier: setup needed", text, ConfigToastMs);
     }
 
-    void OnEvent(const ZtnxEvent &ev) {
-        std::scoped_lock lk(g_mutex);
-        switch (ev.kind) {
-            case ZTNX_EVENT_ADDRESSES: {
-                u32 a = 0, b = 0, c = 0, d = 0;
-                const char *p = ev.text;
-                auto num = [&p](u32 *out) {
-                    if (*p < '0' || *p > '9') return false;
-                    for (*out = 0; *p >= '0' && *p <= '9'; p++) *out = *out * 10 + static_cast<u32>(*p - '0');
-                    return true;
-                };
-                if (num(&a) && *p++ == '.' && num(&b) && *p++ == '.' && num(&c) && *p++ == '.' && num(&d)) {
-                    g_status.ipv4[0] = a, g_status.ipv4[1] = b, g_status.ipv4[2] = c, g_status.ipv4[3] = d;
-                } else {
-                    std::memset(g_status.ipv4, 0, sizeof g_status.ipv4);
-                }
-                break;
-            }
-            case ZTNX_EVENT_PEERS:
-                g_status.peers = ev.value;
-                break;
-            case ZTNX_EVENT_ERROR:
-                CopySafe(g_last_error, sizeof g_last_error, ev.text);
-                break;
-            default:
-                break;
-        }
-    }
-
-    void SetPeers(const ZtnxPeerInfo *peers, size_t n) {
-        std::scoped_lock lk(g_mutex);
-        g_peer_total = n;
-        g_peer_count = std::min(n, static_cast<size_t>(ZTNX_CTL_MAX_PEERS));
-        u32 up = 0;
-        for (size_t i = 0; i < g_peer_count; i++) {
-            g_peers[i] = peers[i];
-            g_peers[i].name[sizeof g_peers[i].name - 1] = 0;
-            if (peers[i].flags & ZTNX_PEER_SESSION) up++;
-        }
-        g_status.peers_up = up;
-        if (up > 0 && !g_handshaken) {
-            g_handshaken = true;
-            if (!g_paused && g_status.state != ZTNX_CTL_STOPPING) {
-                g_status.state = ZTNX_CTL_CONNECTED;
+    void SetNetwork(const ZtnxNetConfig &c) {
+        char title[48] = {}, text[200] = {};
+        u32 toast_ms = 0;
+        {
+            std::scoped_lock lk(g_mutex);
+            g_status.net_status = c.status;
+            g_status.truncated = c.truncated;
+            g_net_ok = c.status == ZTNX_NET_OK && c.n_addrs > 0;
+            if (g_net_ok) std::memcpy(g_status.ipv4, c.addrs[0].ip, 4);
+            else std::memset(g_status.ipv4, 0, sizeof g_status.ipv4);
+            CopySafe(g_net_name, sizeof g_net_name, c.name);
+            if (!g_paused && g_status.state != ZTNX_CTL_STOPPING && g_runtime) g_status.state = RunningState();
+            if (g_net_ok) {
+                g_last_error[0] = 0;
                 AnnounceConnected();
             }
+            // Say once what stands in the way, with what to do about it.
+            const int status = static_cast<int>(c.status);
+            if (!g_net_ok && status != g_announced_net) {
+                switch (c.status) {
+                    case ZTNX_NET_ACCESS_DENIED:
+                        util::SNPrintf(g_last_error, sizeof g_last_error, "Authorize %010llx in the network's controller (my.zerotier.com or your own).",
+                                       static_cast<unsigned long long>(g_status.node));
+                        util::SNPrintf(title, sizeof title, "ZeroTier: not authorized yet");
+                        break;
+                    case ZTNX_NET_NOT_FOUND:
+                        util::SNPrintf(g_last_error, sizeof g_last_error, "There is no network %016llx. Check network= in config/zerotier-nx/config.ini.",
+                                       static_cast<unsigned long long>(g_status.nwid));
+                        util::SNPrintf(title, sizeof title, "ZeroTier: network not found");
+                        break;
+                    case ZTNX_NET_AUTH_REQUIRED:
+                        util::SNPrintf(g_last_error, sizeof g_last_error, "This network asks for single sign-on, which the Switch can't do.");
+                        util::SNPrintf(title, sizeof title, "ZeroTier: can't join");
+                        break;
+                    case ZTNX_NET_CLIENT_TOO_OLD:
+                        util::SNPrintf(g_last_error, sizeof g_last_error, "The network's controller says this ZeroTier is too old for it.");
+                        util::SNPrintf(title, sizeof title, "ZeroTier: can't join");
+                        break;
+                    default:
+                        break;
+                }
+                if (title[0]) {
+                    g_announced_net = status;
+                    util::SNPrintf(text, sizeof text, "%s", g_last_error);
+                    toast_ms = ConfigToastMs;
+                }
+            }
+            if (c.truncated && !g_announced_truncated && !title[0]) {
+                g_announced_truncated = true;
+                util::SNPrintf(title, sizeof title, "ZeroTier: network too large");
+                util::SNPrintf(text, sizeof text, "This network has more rules, routes or tags than the Switch has room for. Some traffic may not work.");
+                if (!g_last_error[0]) util::SNPrintf(g_last_error, sizeof g_last_error, "%s", text);
+                toast_ms = ConfigToastMs;
+            }
         }
+        if (toast_ms) Toast(ConfigNotifyPath, title, text, toast_ms);
+    }
+
+    void OnEngineEvent(u32 event) {
+        std::scoped_lock lk(g_mutex);
+        if (event == ZTNX_EVENT_ONLINE) g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_NO_ROOTS);
+        else if (event == ZTNX_EVENT_OFFLINE) g_status.flags |= ZTNX_CTL_FLAG_NO_ROOTS;
+    }
+
+    void SetPeers(const ZtnxPeerInfo *peers, size_t n, size_t total) {
+        std::scoped_lock lk(g_mutex);
+        g_peer_total = total;
+        g_peer_count = std::min(n, static_cast<size_t>(ZTNX_CTL_MAX_PEERS));
+        u32 leaves = 0, direct = 0;
+        for (size_t i = 0; i < g_peer_count; i++) {
+            const ZtnxPeerInfo &p = peers[i];
+            ZtnxCtlPeer &o = g_peers[i];
+            std::memset(std::addressof(o), 0, sizeof o);
+            o.address = p.address;
+            o.latency_ms = p.latency_ms;
+            o.last_rx_ms = p.last_rx_ms;
+            std::memcpy(o.path_ip, p.path_ip, 4);
+            o.path_port = p.path_port;
+            o.role = p.role;
+            o.direct = p.direct;
+            std::memcpy(o.version, p.version, 3);
+            if (p.role == ZTNX_PEER_LEAF) {
+                leaves++;
+                if (p.direct) direct++;
+            }
+        }
+        g_status.peers = leaves;
+        g_status.peers_up = direct;
     }
 
     void AnnounceUpdate(const char *latest) {
@@ -273,12 +297,12 @@ namespace ams::status {
         return static_cast<size_t>(util::SNPrintf(out, cap, "%s", g_last_error));
     }
 
-    size_t GetConfName(char *out, size_t cap) {
+    size_t GetNetworkName(char *out, size_t cap) {
         std::scoped_lock lk(g_mutex);
-        return static_cast<size_t>(util::SNPrintf(out, cap, "%s", g_conf_name));
+        return static_cast<size_t>(util::SNPrintf(out, cap, "%s", g_net_name));
     }
 
-    size_t GetPeers(ZtnxPeerInfo *out, size_t max) {
+    size_t GetPeers(ZtnxCtlPeer *out, size_t max) {
         std::scoped_lock lk(g_mutex);
         std::memcpy(out, g_peers, std::min(g_peer_count, max) * sizeof *out);
         return g_peer_total;

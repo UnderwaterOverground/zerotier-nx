@@ -17,25 +17,38 @@ endif
 
 .PHONY: publish release overlay mitm-test nxlink-mitm-test speedtest nxlink-speedtest all host-test host-c e2e sysmodule libstratosphere docker-image rust-switch nro nxlink clean
 
-all: host-test nro
+all: host-test
 
-host-test:
+# Everything that runs on this machine without Docker or a ZeroTier network.
+host-test: zt-selftest runtime-test routes-test
 	cargo test --workspace
 
-# Local tailnet end-to-end tests (headscale + stock tailscaled in Docker).
+# End-to-end tests against a ZeroTier network in Docker: a self-hosted
+# controller and a stock zerotier-one peer (needs internet: the nodes meet
+# through ZeroTier's root servers).
 e2e:
 	e2e/setup.sh
 	e2e/run-tests.sh
 
-# Host build of the C driver + FFI (the Switch app's code paths, on the Mac).
-HOST_C_SRCS := native/host/main.c native/driver/ztnx_driver.c native/driver/ztnx_app.c native/driver/ztnx_dns.c \
-	native/driver/ztnx_update.c
-host-c: target/ztnx-c
+# The host tools (macOS; Linux builds are e2e/build-linux.sh's). They share
+# the sysmodule's driver, runtime and socket layer, and link ZeroTier's core.
+HOST_INC := -Icrates/ztnx-ffi/include -Inative/driver -Inative/runtime -Inative/vsock -Inative/zt -Inative/host
+HOST_C_SRCS := native/driver/ztnx_driver.c native/driver/ztnx_app.c native/driver/ztnx_dns.c native/driver/ztnx_update.c
+HOST_CXX_SRCS := native/runtime/runtime.cpp native/runtime/zt_link.cpp native/vsock/vsock.cpp native/host/session.cpp
+HOST_OBJS := target/ztnx_driver.o target/ztnx_app.o target/ztnx_dns.o target/ztnx_update.o
+HOST_LIBS := target/zt-host/libztcore.a target/debug/libztnx_ffi.a -framework CoreFoundation -framework Security
 
-target/ztnx-c: $(HOST_C_SRCS) native/driver/*.h crates/ztnx-ffi/include/ztnx.h FORCE
+.PHONY: host-objs
+host-objs: zt-host FORCE
 	cargo build -p ztnx-ffi
-	$(CC) -O1 -g -Wall -Wextra -DZTNX_BUILD_UNIX=$(BUILD_UNIX) -o $@ $(HOST_C_SRCS) -Icrates/ztnx-ffi/include -Inative/driver \
-		target/debug/libztnx_ffi.a -framework CoreFoundation -framework Security
+	$(CC) -c -O1 -g -Wall $(HOST_INC) native/driver/ztnx_driver.c -o target/ztnx_driver.o
+	$(CC) -c -O1 -g -Wall -DZTNX_BUILD_UNIX=$(BUILD_UNIX) $(HOST_INC) native/driver/ztnx_app.c -o target/ztnx_app.o
+	$(CC) -c -O1 -g -Wall $(HOST_INC) native/driver/ztnx_dns.c -o target/ztnx_dns.o
+	$(CC) -c -O1 -g -Wall $(HOST_INC) native/driver/ztnx_update.c -o target/ztnx_update.o
+
+# ztnx-c: the sysmodule's parts without the socket MITM (see native/host/main.cpp).
+host-c: host-objs
+	$(CXX) -std=c++17 -O1 -g -Wall -Wextra $(HOST_INC) -o target/ztnx-c native/host/main.cpp $(HOST_CXX_SRCS) $(HOST_OBJS) $(HOST_LIBS)
 
 FORCE:
 
@@ -149,31 +162,22 @@ clean:
 
 # Interpose shim (run unmodified programs through the socket virtualization
 # layer) and its test client, for macOS.
-VSOCK_SRCS := native/vsock/vsock.cpp native/runtime/runtime.cpp native/interpose/interpose.cpp
-VSOCK_C_SRCS := native/driver/ztnx_driver.c native/driver/ztnx_app.c native/driver/ztnx_update.c
-VSOCK_INC := -Icrates/ztnx-ffi/include -Inative/driver -Inative/runtime -Inative/vsock
-.PHONY: interpose
+.PHONY: interpose routes-test runtime-test
 interpose: target/libztnx_interpose.dylib target/vsock-test
 
-target/libztnx_interpose.dylib: $(VSOCK_SRCS) $(VSOCK_C_SRCS) native/*/*.h* FORCE
-	cargo build -p ztnx-ffi
-	$(CC) -c -O1 -g -Wall $(VSOCK_INC) native/driver/ztnx_driver.c -o target/ztnx_driver.o
-	$(CC) -c -O1 -g -Wall -DZTNX_BUILD_UNIX=$(BUILD_UNIX) $(VSOCK_INC) native/driver/ztnx_app.c -o target/ztnx_app.o
-	$(CC) -c -O1 -g -Wall $(VSOCK_INC) native/driver/ztnx_dns.c -o target/ztnx_dns.o
-	$(CC) -c -O1 -g -Wall $(VSOCK_INC) native/driver/ztnx_update.c -o target/ztnx_update.o
-	$(CXX) -std=c++17 -O1 -g -Wall -dynamiclib -o $@ $(VSOCK_INC) $(VSOCK_SRCS) target/ztnx_driver.o target/ztnx_app.o target/ztnx_dns.o target/ztnx_update.o \
-		target/debug/libztnx_ffi.a -framework CoreFoundation -framework Security
+target/libztnx_interpose.dylib: host-objs
+	$(CXX) -std=c++17 -O1 -g -Wall -dynamiclib -o $@ $(HOST_INC) native/interpose/interpose.cpp $(HOST_CXX_SRCS) $(HOST_OBJS) $(HOST_LIBS)
 
-# The socket layer's subnet-route check (macOS; links the interpose shim).
-.PHONY: routes-test
+# The socket layer's route check (links the interpose shim).
 routes-test: target/libztnx_interpose.dylib
-	$(CXX) -std=c++17 -O1 -g -Wall $(VSOCK_INC) -o target/routes-test native/host/routes_test.cpp $<
+	$(CXX) -std=c++17 -O1 -g -Wall $(HOST_INC) -o target/routes-test native/host/routes_test.cpp $<
 	target/routes-test
 
-# The runtime's non-blocking pause (macOS; links the interpose shim).
-.PHONY: runtime-test
-runtime-test: target/libztnx_interpose.dylib
-	$(CXX) -std=c++17 -O1 -g -Wall $(VSOCK_INC) -o target/runtime-test native/host/runtime_test.cpp $<
+# The runtime against a fake engine: who runs engine code and with what
+# held, wake-ups, timers, pause and suspend.
+runtime-test: host-objs
+	$(CXX) -std=c++17 -O1 -g -Wall -Wextra $(HOST_INC) -o target/runtime-test native/host/runtime_test.cpp native/runtime/runtime.cpp \
+		target/ztnx_driver.o target/debug/libztnx_ffi.a -framework CoreFoundation -framework Security
 	target/runtime-test
 
 target/vsock-test: native/interpose/vsock_test.c

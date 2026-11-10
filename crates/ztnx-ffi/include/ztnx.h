@@ -38,6 +38,9 @@ size_t ztnx_heap_classes(char *buf, size_t len);
 
 // Seeds the core's CSPRNG with 32 bytes of entropy. Call once at startup.
 void ztnx_seed_rng(const uint8_t seed[32]);
+
+// Fills buf from the core's CSPRNG. False if it has not been seeded yet.
+bool ztnx_random_bytes(uint8_t *buf, size_t len);
 // Wall-clock time (Unix seconds) used for certificate validity checks (the
 // update check's TLS).
 void ztnx_set_unix_time(uint64_t unix_secs);

@@ -10,17 +10,29 @@ TARGET		:=	zerotier-nx
 BUILD		:=	build
 SOURCES		:=	source ../../native/driver ../../native/runtime ../../native/vsock
 DATA		:=	data
-INCLUDES	:=	source ../../native/driver ../../native/runtime ../../native/vsock ../../native/ctl ../../crates/ztnx-ffi/include
+INCLUDES	:=	source ../../native/driver ../../native/runtime ../../native/vsock ../../native/ctl ../../native/zt ../../crates/ztnx-ffi/include
 TITLE_ID	:=	4200000000005A54
 
 ZTNX_BUILD_UNIX ?= $(shell date +%s)
 RUST_LIB_DIR	?=	$(abspath $(SYSMODULE_DIR)/../../target/switch/aarch64-nintendo-switch-freestanding/release)
+# ZeroTier's core and its glue (native/zt), built by the top-level Makefile.
+ZT_LIB_DIR	?=	$(abspath $(SYSMODULE_DIR)/../../target/zt-switch)
 # No newlib stdio/printf: state files go through ams::fs, and the shared C
 # code's snprintf is routed to libstratosphere's formatter (see
 # ztnx_snprintf in main.cpp and ztnx_driver.h).
 CFLAGS		+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -Wno-error=sign-compare -DZTNX_NO_STDIO
 CXXFLAGS	+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -DZTNX_NO_STDIO
-LIBS		:=	-lztnx_ffi $(LIBS)
+LIBS		:=	-lztnx_ffi -lztcore $(LIBS)
+
+# ZeroTier's core uses C++ exceptions. Atmosphère's template links every
+# sysmodule with the exception entry points wrapped to abort stubs and with
+# .eh_frame discarded (stratosphere.specs); undo both. What is kept: pure
+# virtual calls and exit() still abort. Code built without exceptions (all of
+# it except libztcore.a and operator_new.cpp) has no unwind tables, so an
+# exception that reached it would end in std::terminate; the core catches its
+# own at the ZT_Node_* boundary.
+CXXWRAPS	:=	-Wl,--wrap,__cxa_pure_virtual -Wl,--wrap,exit
+LDFLAGS		=	-specs=$(DEVKITPRO)/libnx/switch.specs $(CXXFLAGS) $(CXXWRAPS) $(CXXREQUIRED) -Wl,-Map,$(notdir $*.map) -Wl,-z,relro,-z,now
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -39,9 +51,10 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			-I$(CURDIR)/$(BUILD)
 export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
 			$(foreach dir,$(AMS_LIBDIRS),-L$(dir)/$(ATMOSPHERE_LIBRARY_DIR)) \
-			-L$(RUST_LIB_DIR)
+			-L$(RUST_LIB_DIR) -L$(ZT_LIB_DIR)
 export APP_JSON	:=	$(TOPDIR)/res/app.json
 export RUST_LIB_DIR
+export ZT_LIB_DIR
 
 .PHONY: $(BUILD) clean all dist
 
@@ -69,7 +82,10 @@ DEPENDS	:=	$(OFILES:.o=.d)
 all	:	$(OUTPUT).nsp
 $(OUTPUT).nsp	:	$(OUTPUT).nso $(OUTPUT).npdm
 $(OUTPUT).nso	:	$(OUTPUT).elf
-$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libztnx_ffi.a
+$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libztnx_ffi.a $(ZT_LIB_DIR)/libztcore.a
+
+# The one file here that throws (std::bad_alloc from operator new).
+operator_new.o	:	CXXFLAGS += -fexceptions
 $(OFILES)	:	$(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/$(ATMOSPHERE_LIBRARY_DIR)/libstratosphere.a
 
 %.npdm	:	$(APP_JSON)

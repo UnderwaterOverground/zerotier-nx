@@ -43,6 +43,7 @@ extern "C" {
 #include "ztnx_app.h"
 #include "ztnx_dns.h"
 #include "ztnx_driver.h"
+#include "ztnx_engine.h"
 #include "ztnx_update.h"
 }
 
@@ -98,11 +99,9 @@ namespace ams {
         constexpr const char OldLogPath[] = "sdmc:/config/zerotier-nx/sysmodule.log.1";
         constexpr s64 LogMaxSize = 512_KB;
 
-        // Heap for the engine (Rust core + driver) and our own allocations,
-        // sized at build time so the whole sysmodule takes exactly 2.5 MB
-        // (heap_size.h). Measured on the console: everything peaked at
-        // 629 KB with the default 320 KB overlay budget (a Moonlight
-        // connection burst).
+        // Heap for ZeroTier's core, the Rust stack, the driver and our own
+        // allocations, sized at build time so the whole sysmodule takes
+        // exactly 4 MB (heap_size.h).
         constexpr size_t MallocBufferSize = ZTNX_HEAP_SIZE;
         static_assert(MallocBufferSize % os::MemoryPageSize == 0);
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
@@ -1226,13 +1225,29 @@ namespace ams {
         ztnx_set_log_callback([](u32 level, const char *msg) { Log("%s%s", level <= 2 ? "WARN " : "", msg); }, 3);
         ztnx_set_resolver(ResolveViaDns);
 
+        // The ZeroTier identity's keys come from this generator, so seed it
+        // with all 256 bits of the kernel's entropy: GenerateRandomBytes is a
+        // TinyMT seeded from half of them.
         u8 seed[32];
         os::GenerateRandomBytes(seed, sizeof seed);
+        for (int i = 0; i < 4; i++) {
+            u64 entropy = 0;
+            if (R_SUCCEEDED(svc::GetInfo(&entropy, svc::InfoType_RandomEntropy, svc::InvalidHandle, i))) {
+                for (int b = 0; b < 8; b++) seed[i * 8 + b] ^= static_cast<u8>(entropy >> (8 * b));
+            }
+        }
         ztnx_seed_rng(seed);
         if (const u32 st = ztnx_selftest(); st != ZTNX_SELFTEST_OK) {
             Log("crypto selftest FAILED (%u); not starting", st);
             return;
         }
+        // ZeroTier's core throws and catches C++ exceptions, which Atmosphère's
+        // default link turns into aborts. Make sure this build's link didn't.
+        if (const u32 st = ztnx_engine_selftest(); st != 0) {
+            Log("C++ exceptions selftest FAILED (0x%x); not starting", st);
+            return;
+        }
+        Log("C++ exceptions: ok");
 
         // Boot2 runs before Wi-Fi is up (about 25 s before, typically).
         // nifm only signals events for network requests of our own, which
@@ -1487,16 +1502,8 @@ extern "C" [[noreturn]] void ztnx_platform_panic(const uint8_t *msg, size_t len)
     AMS_ABORT("ztnx core panic");
 }
 
-// libstratosphere routes operator new/delete through its allocator only when
-// asked; send them to malloc (backed by g_malloc_buffer).
-void *operator new(size_t size) { return std::malloc(size); }
-void *operator new(size_t size, const std::nothrow_t &) { return std::malloc(size); }
-void operator delete(void *p) { std::free(p); }
-void operator delete(void *p, size_t) { std::free(p); }
-void *operator new[](size_t size) { return std::malloc(size); }
-void *operator new[](size_t size, const std::nothrow_t &) { return std::malloc(size); }
-void operator delete[](void *p) { std::free(p); }
-void operator delete[](void *p, size_t) { std::free(p); }
+// operator new and delete are in operator_new.cpp (on malloc, which is
+// backed by g_malloc_buffer).
 
 // The shared C helpers' snprintf, routed to libstratosphere's formatter
 // (the sysmodule build defines snprintf=ztnx_snprintf): newlib's would add
@@ -1511,3 +1518,9 @@ extern "C" int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...) {
 
 // Used by the shared app helpers (ztnx_app.c).
 extern "C" void ztnx_platform_random(uint8_t *buf, size_t len) { ams::os::GenerateRandomBytes(buf, len); }
+
+// ZeroTier's random source: the core's CSPRNG, seeded in Main before any
+// ZeroTier code runs.
+extern "C" void ztnx_secure_random(void *buf, unsigned int len) {
+    AMS_ABORT_UNLESS(ztnx_random_bytes(static_cast<uint8_t *>(buf), len));
+}

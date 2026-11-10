@@ -1,5 +1,5 @@
 #!/bin/sh
-# Keeps the sysmodule's memory at exactly 2.5 MB (2560 KB): sizes its heap
+# Keeps the sysmodule's memory at exactly 4 MB (4096 KB): sizes its heap
 # (switch/sysmodule/source/heap_size.h) to fill what the code leaves. The
 # kernel charges a sysmodule its loaded image (code, data and the static
 # heap, page by page) plus its main thread's stack, once, at launch.
@@ -8,8 +8,8 @@
 # Exit 3: heap_size.h was rewritten; rebuild. Other: an error.
 set -eu
 cd "$(dirname "$0")/.."
-target=$((0x280000))
-min_heap=$((768 * 1024))  # engine (~300 KB) + overlay_budget_kb up to 384 + slack
+target=$((0x400000))
+min_heap=$((1536 * 1024))  # ZeroTier (~1.1 MB at its peak) + overlay_budget_kb up to 384 + slack; to be measured
 elf=switch/sysmodule/zerotier-nx.elf
 header=switch/sysmodule/source/heap_size.h
 readelf=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-readelf
@@ -32,7 +32,7 @@ if [ $((new % 4096)) -ne 0 ] || [ "$new" -lt "$min_heap" ]; then
 fi
 cat > "$header" <<HDR
 // The sysmodule's heap size, written by tools/footprint.sh (make sysmodule):
-// it fills the sysmodule's memory up to exactly 2.5 MB (2560 KB) with the
+// it fills the sysmodule's memory up to exactly 4 MB (4096 KB) with the
 // code as built. Commit it with the code change that moved it.
 #define ZTNX_HEAP_SIZE $(printf '0x%X' "$new")
 HDR

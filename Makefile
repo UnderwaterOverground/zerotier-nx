@@ -64,9 +64,35 @@ $(LIBSTRAT): $(ATMOSPHERE_PATCHES)
 	done
 	$(SW) make -C third_party/Atmosphere/libraries/libstratosphere -j8
 
-# Then holds its memory at exactly 2.5 MB (tools/footprint.sh resizes the heap
+# ZeroTier's core (third_party/ZeroTierOne/node) with our changes to it
+# (patches/zerotier-*.patch, applied to the submodule's working tree), built
+# as target/zt-switch/libztcore.a and, for host tests and e2e, target/zt-host.
+ZEROTIER_PATCHES := $(sort $(wildcard patches/zerotier-*.patch))
+.PHONY: zerotier-patches zt-switch zt-host
+zerotier-patches:
+	@[ -e third_party/ZeroTierOne/.git ] || { echo "third_party/ZeroTierOne is not checked out here (a worktree?): not patching"; exit 0; }; \
+	for p in $(ZEROTIER_PATCHES); do \
+	  git -C third_party/ZeroTierOne apply --reverse --check ../../$$p 2>/dev/null || \
+	  git -C third_party/ZeroTierOne apply ../../$$p || exit 1; \
+	done
+
+zt-switch: zerotier-patches
+	$(SW) make -C native/zt PLATFORM=switch -j8
+
+zt-host: zerotier-patches
+	$(MAKE) -C native/zt PLATFORM=host -j8
+
+# The glue's check that C++ exceptions work, on this machine. (From a
+# worktree, where the submodule is empty: make zt-selftest ZT=<main checkout>/third_party/ZeroTierOne)
+.PHONY: zt-selftest
+zt-selftest: zt-host
+	$(CC) -c -Inative/zt native/host/zt_selftest.c -o target/zt_selftest.o
+	$(CXX) -o target/zt-selftest target/zt_selftest.o target/zt-host/libztcore.a
+	target/zt-selftest
+
+# Then holds its memory at exactly 4 MB (tools/footprint.sh resizes the heap
 # and asks for one more build when the code size moved).
-sysmodule: rust-switch $(LIBSTRAT)
+sysmodule: rust-switch zt-switch $(LIBSTRAT)
 	$(SW) make -C switch/sysmodule ZTNX_BUILD_UNIX=$(BUILD_UNIX) dist
 	$(SW) tools/footprint.sh || { [ $$? -eq 3 ] && $(SW) make -C switch/sysmodule ZTNX_BUILD_UNIX=$(BUILD_UNIX) dist && $(SW) tools/footprint.sh; }
 

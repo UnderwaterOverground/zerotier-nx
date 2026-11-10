@@ -45,6 +45,15 @@ pub unsafe extern "C" fn ztnx_seed_rng(seed: *const u8) {
     ztnx_core::rng::seed(seed);
 }
 
+/// Fills `buf` from the core's CSPRNG. False if it has not been seeded yet.
+#[no_mangle]
+pub unsafe extern "C" fn ztnx_random_bytes(buf: *mut u8, len: usize) -> bool {
+    if buf.is_null() {
+        return false;
+    }
+    ztnx_core::rng::fill(core::slice::from_raw_parts_mut(buf, len)).is_ok()
+}
+
 /// Sets wall-clock time (seconds since the Unix epoch) for certificate checks.
 #[no_mangle]
 pub extern "C" fn ztnx_set_unix_time(unix_secs: u64) {

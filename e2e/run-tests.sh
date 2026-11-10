@@ -43,6 +43,22 @@ client pkill -x zt-smoke >/dev/null 2>&1
 echo "--- smoke log ---"; client cat /state/smoke/log | sed 's/^/    /'
 ./ctl.sh api DELETE "/controller/network/$NW/member/$ADDR" >/dev/null 2>&1
 
+# ---- 2. The same across threads (ztnx-c): the runtime's loop carries frames
+# ----    between the stack and ZeroTier while this thread uses sockets.
+echo "== runtime =="
+check "the runtime's own tests (a fake engine)" client /out/runtime-test
+client sh -c 'pkill -x ztnx-c; mkdir -p /state/main' >/dev/null 2>&1
+docker compose exec -T -d client sh -c "/out/ztnx-c --state /state/main --join $NW --gen-identity --log --echo-test $PEER_IP --sleep-test --for 90 > /state/main/log 2>&1"
+check "ztnx-c starts" wait_log 20 '^node: ' /state/main/log
+MAIN_ADDR=$(client sed -n 's/^node: //p' /state/main/log)
+./ctl.sh authorize "$MAIN_ADDR" >/dev/null
+check "the network comes up" wait_log 75 '^network: OK ip=10\.147\.17\.' /state/main/log
+check "TCP and UDP echo from another thread" wait_log 40 '^echo: ok' /state/main/log
+check "suspend closes the socket within 2.5 s" wait_log 20 '^suspend: ok .*socket closed' /state/main/log
+check "echo again after resume" wait_log 60 '^echo after resume: ok' /state/main/log
+check "ztnx-c reports success" wait_log 10 '^result: ok' /state/main/log
+echo "--- ztnx-c log ---"; client cat /state/main/log | sed 's/^/    /'
+
 echo
 if [ "$fails" -eq 0 ]; then echo "all passed"; else echo "$fails failed"; fi
 exit "$fails"

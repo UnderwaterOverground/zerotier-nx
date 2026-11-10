@@ -83,11 +83,7 @@ $(LIBSTRAT): $(ATMOSPHERE_PATCHES)
 ZEROTIER_PATCHES := $(sort $(wildcard patches/zerotier-*.patch))
 .PHONY: zerotier-patches zt-switch zt-host
 zerotier-patches:
-	@[ -e third_party/ZeroTierOne/.git ] || { echo "third_party/ZeroTierOne is not checked out here (a worktree?): not patching"; exit 0; }; \
-	for p in $(ZEROTIER_PATCHES); do \
-	  git -C third_party/ZeroTierOne apply --reverse --check ../../$$p 2>/dev/null || \
-	  git -C third_party/ZeroTierOne apply ../../$$p || exit 1; \
-	done
+	@tools/zerotier-patches.sh
 
 zt-switch: zerotier-patches
 	$(SW) make -C native/zt PLATFORM=switch -j8

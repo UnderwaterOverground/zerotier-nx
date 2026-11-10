@@ -38,8 +38,11 @@ mod limits {
     /// Datagrams queued per UDP socket (bytes, counting allocation size).
     pub const UDP_RX: usize = 512 << 10;
     pub const BUDGET: usize = usize::MAX;
-    /// Packets waiting for the tunnel (see `Queues`).
+    /// Packets waiting for the tunnel (see `Queues`), and their bytes.
     pub const OUT_PKTS: usize = 256;
+    pub const OUT_BYTES: usize = 1 << 20;
+    /// Packets from the tunnel waiting for the next poll.
+    pub const IN_PKTS: usize = 1024;
 }
 // Measured on the console: a Moonlight stream keeps 0-6 KB queued while the
 // app reads; only a suspended app (HOME menu) fills a queue, and stale video
@@ -52,6 +55,9 @@ mod limits {
     /// Default; the sysmodule's config can change it (`set_budget`).
     pub const BUDGET: usize = 320 << 10;
     pub const OUT_PKTS: usize = 64;
+    /// 64 full TCP segments, or 34 datagrams of the largest size.
+    pub const OUT_BYTES: usize = 96 << 10;
+    pub const IN_PKTS: usize = 64;
 }
 use limits::*;
 /// Smallest TCP buffer (each direction): a few full-size segments.
@@ -119,17 +125,38 @@ pub struct Readiness {
 struct Queues {
     inbound: VecDeque<Vec<u8>>,
     outbound: VecDeque<Vec<u8>>,
+    /// Bytes in `outbound`.
+    out_bytes: usize,
+    /// Largest IP packet smoltcp (TCP, ICMP) sends.
     mtu: usize,
+    /// Largest IP packet a UDP socket may send. It can be larger than `mtu`
+    /// when the link below splits big packets itself and TCP should stay
+    /// under the size at which it does.
+    udp_mtu: usize,
 }
 
 impl Queues {
     fn outbound_full(&self) -> bool {
-        self.outbound.len() >= OUT_PKTS
+        self.outbound.len() >= OUT_PKTS || self.out_bytes >= OUT_BYTES
+    }
+
+    fn push_outbound(&mut self, pkt: Vec<u8>) {
+        self.out_bytes += pkt.len();
+        self.outbound.push_back(pkt);
+    }
+
+    fn pop_outbound(&mut self) -> Option<Vec<u8>> {
+        let pkt = self.outbound.pop_front()?;
+        self.out_bytes -= pkt.len();
+        Some(pkt)
     }
 }
 
 struct RxToken(Vec<u8>);
-struct TxToken<'a>(&'a mut VecDeque<Vec<u8>>);
+struct TxToken<'a> {
+    queue: &'a mut VecDeque<Vec<u8>>,
+    bytes: &'a mut usize,
+}
 
 impl phy::RxToken for RxToken {
     fn consume<R, F: FnOnce(&[u8]) -> R>(self, f: F) -> R {
@@ -141,7 +168,8 @@ impl phy::TxToken for TxToken<'_> {
     fn consume<R, F: FnOnce(&mut [u8]) -> R>(self, len: usize, f: F) -> R {
         let mut buf = vec![0u8; len];
         let r = f(&mut buf);
-        self.0.push_back(buf);
+        *self.bytes += len;
+        self.queue.push_back(buf);
         r
     }
 }
@@ -152,14 +180,14 @@ impl Device for Queues {
 
     fn receive(&mut self, _: smoltcp::time::Instant) -> Option<(RxToken, TxToken<'_>)> {
         let pkt = self.inbound.pop_front()?;
-        Some((RxToken(pkt), TxToken(&mut self.outbound)))
+        Some((RxToken(pkt), TxToken { queue: &mut self.outbound, bytes: &mut self.out_bytes }))
     }
 
     fn transmit(&mut self, _: smoltcp::time::Instant) -> Option<TxToken<'_>> {
         if self.outbound_full() {
             return None;
         }
-        Some(TxToken(&mut self.outbound))
+        Some(TxToken { queue: &mut self.outbound, bytes: &mut self.out_bytes })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -223,13 +251,8 @@ fn socket_addr(ep: IpEndpoint) -> SocketAddr {
 
 impl Netstack {
     pub fn new(now: Instant, mtu: usize) -> Self {
-        let mut dev = Queues { mtu, ..Default::default() };
-        let config = Config::new(HardwareAddress::Ip);
-        let mut iface = Interface::new(config, &mut dev, smol_now(now));
-        // Everything not on-link goes "out the tunnel"; with Medium::Ip the
-        // gateway is never resolved, it only has to exist.
-        let _ = iface.routes_mut().add_default_ipv4_route(core::net::Ipv4Addr::new(192, 0, 2, 1));
-        let _ = iface.routes_mut().add_default_ipv6_route(core::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        let mut dev = Queues { mtu, udp_mtu: mtu, ..Default::default() };
+        let iface = Self::new_iface(&mut dev, now);
         Self {
             iface,
             sockets: SocketSet::new(Vec::new()),
@@ -249,9 +272,35 @@ impl Netstack {
         }
     }
 
+    fn new_iface(dev: &mut Queues, now: Instant) -> Interface {
+        let config = Config::new(HardwareAddress::Ip);
+        let mut iface = Interface::new(config, dev, smol_now(now));
+        // Everything not on-link goes "out the tunnel"; with Medium::Ip the
+        // gateway is never resolved, it only has to exist.
+        let _ = iface.routes_mut().add_default_ipv4_route(core::net::Ipv4Addr::new(192, 0, 2, 1));
+        let _ = iface.routes_mut().add_default_ipv6_route(core::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+        iface
+    }
+
     /// Sets the interface's MTU (packets built here are limited to it).
     pub fn set_mtu(&mut self, mtu: usize) {
         self.dev.mtu = mtu;
+        self.dev.udp_mtu = mtu;
+    }
+
+    /// Sets the largest IP packet TCP and ICMP send, and the largest a UDP
+    /// socket may send. smoltcp reads its device's MTU once, when the
+    /// interface is made, so a new TCP limit means a new interface; sockets
+    /// are not part of it and carry on (connections keep the segment size
+    /// they agreed).
+    pub fn set_mtus(&mut self, mtu: usize, udp_mtu: usize) {
+        self.dev.udp_mtu = udp_mtu;
+        if mtu != self.dev.mtu {
+            self.dev.mtu = mtu;
+            self.iface = Self::new_iface(&mut self.dev, self.last_now);
+            let addrs = core::mem::take(&mut self.addrs);
+            self.set_addresses(&addrs);
+        }
     }
 
     /// Sets this interface's addresses.
@@ -287,6 +336,11 @@ impl Netstack {
             packet
         };
         if let Some(packet) = self.deliver_udp(packet) {
+            // Every caller polls after injecting, which empties this queue;
+            // the cap is for one that doesn't.
+            if self.dev.inbound.len() >= IN_PKTS {
+                return;
+            }
             if let Some(port) = self.syn_port(&packet) {
                 self.arm_listener(port);
             }
@@ -331,7 +385,24 @@ impl Netstack {
 
     /// Takes IP packets the stack wants to send into the tunnel.
     pub fn take_outbound(&mut self) -> impl Iterator<Item = Vec<u8>> + '_ {
+        self.dev.out_bytes = 0;
         self.dev.outbound.drain(..)
+    }
+
+    /// Takes the oldest IP packet the stack wants to send.
+    pub fn pop_outbound(&mut self) -> Option<Vec<u8>> {
+        self.dev.pop_outbound()
+    }
+
+    /// Packets waiting to be sent.
+    pub fn outbound_len(&self) -> usize {
+        self.dev.outbound.len()
+    }
+
+    /// Drops the packets waiting to be sent (after a sleep they are stale).
+    pub fn clear_outbound(&mut self) {
+        self.dev.outbound.clear();
+        self.dev.out_bytes = 0;
     }
 
     /// When [`Self::poll`] should next run (absent new input).
@@ -424,9 +495,9 @@ impl Netstack {
     pub fn udp_send_to(&mut self, id: SockId, data: &[u8], dst: SocketAddr) -> Result<(), NetError> {
         let Some(Sock::Udp { port, .. }) = self.socks.get(&id) else { return Err(NetError::InvalidSocket) };
         let src = self.addrs.iter().copied().find(|a| a.is_ipv4() == dst.is_ipv4()).ok_or(NetError::Invalid)?;
-        let pkt = udp::build(SocketAddr::new(src, *port), dst, data, self.dev.mtu).ok_or(NetError::Invalid)?;
+        let pkt = udp::build(SocketAddr::new(src, *port), dst, data, self.dev.udp_mtu).ok_or(NetError::Invalid)?;
         if !self.dev.outbound_full() {
-            self.dev.outbound.push_back(pkt);
+            self.dev.push_outbound(pkt);
         }
         Ok(())
     }
@@ -1607,5 +1678,93 @@ mod tests {
         assert!(!super::reasm::is_fragment(&pkt));
         net.inject(pkt);
         assert_eq!(recv_one(&mut net, sock).unwrap().0, b"hello");
+    }
+
+    /// With the link below splitting anything over 1394 bytes in two, TCP is
+    /// told to stay under it while UDP may still send up to the network's MTU.
+    #[test]
+    fn tcp_and_udp_have_separate_size_limits() {
+        let me = IpAddr::V4(Ipv4Addr::new(10, 20, 30, 2));
+        let peer = IpAddr::V4(Ipv4Addr::new(10, 20, 30, 7));
+        let mut net = Netstack::new(Instant::from_millis(0), DEFAULT_MTU);
+        net.set_addresses(&[me]);
+        net.set_mtus(1394, 2800);
+
+        net.tcp_connect(SocketAddr::new(peer, 80)).unwrap();
+        net.poll(Instant::from_millis(1));
+        let syn = net.pop_outbound().expect("a SYN");
+        assert_eq!(syn[9], 6);
+        // The first option of the SYN is the MSS: kind 2, length 4.
+        assert_eq!(&syn[40..42], &[2, 4]);
+        assert_eq!(u16::from_be_bytes([syn[42], syn[43]]), 1394 - 40);
+        assert_eq!(net.outbound_len(), 0);
+
+        let udp = net.udp_bind(4000).unwrap();
+        let dst = SocketAddr::new(peer, 4001);
+        assert_eq!(net.udp_send_to(udp, &alloc::vec![7u8; 2800 - 28], dst), Ok(()));
+        assert_eq!(net.udp_send_to(udp, &alloc::vec![7u8; 2800 - 27], dst), Err(NetError::Invalid));
+        assert_eq!(net.pop_outbound().map(|p| p.len()), Some(2800));
+        assert_eq!(net.pop_outbound(), None);
+
+        // A datagram that large coming in is delivered whole.
+        let big = udp::build(dst, SocketAddr::new(me, 4000), &alloc::vec![9u8; 2800 - 28], 2800).unwrap();
+        net.inject(big);
+        let mut buf = [0u8; 4096];
+        assert_eq!(net.udp_recv_from(udp, &mut buf), Ok((2800 - 28, dst)));
+    }
+
+    /// The outbound queue is bounded in bytes as well as packets: large
+    /// datagrams reach the byte limit long before the packet limit.
+    #[test]
+    fn outbound_queue_is_bounded_in_bytes() {
+        let me = IpAddr::V4(Ipv4Addr::new(10, 20, 30, 2));
+        let dst = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 20, 30, 7)), 4001);
+        let mut net = Netstack::new(Instant::from_millis(0), DEFAULT_MTU);
+        net.set_addresses(&[me]);
+        net.set_mtus(1394, 2800);
+        let udp = net.udp_bind(4000).unwrap();
+        for _ in 0..2 * OUT_PKTS {
+            assert_eq!(net.udp_send_to(udp, &alloc::vec![7u8; 2800 - 28], dst), Ok(()));
+        }
+        let queued = net.outbound_len();
+        assert_eq!(queued, OUT_PKTS.min(OUT_BYTES.div_ceil(2800)));
+        // Draining makes room again, and the count stays right.
+        let mut bytes = 0;
+        while let Some(p) = net.pop_outbound() {
+            bytes += p.len();
+        }
+        assert_eq!(bytes, queued * 2800);
+        assert_eq!(net.udp_send_to(udp, &[1, 2, 3], dst), Ok(()));
+        assert_eq!(net.outbound_len(), 1);
+        net.clear_outbound();
+        assert_eq!(net.outbound_len(), 0);
+        for _ in 0..OUT_PKTS + 5 {
+            net.udp_send_to(udp, &[1], dst).unwrap();
+        }
+        assert_eq!(net.outbound_len(), OUT_PKTS);
+    }
+
+    /// Packets injected without a poll in between don't pile up without
+    /// limit.
+    #[test]
+    fn inbound_queue_is_bounded() {
+        let me = Ipv4Addr::new(10, 20, 30, 2);
+        let mut net = Netstack::new(Instant::from_millis(0), DEFAULT_MTU);
+        net.set_addresses(&[IpAddr::V4(me)]);
+        // TCP segments to a port nobody listens on (not UDP, which never
+        // enters this queue).
+        let mut pkt = alloc::vec![0u8; 40];
+        pkt[0] = 0x45;
+        pkt[2..4].copy_from_slice(&40u16.to_be_bytes());
+        pkt[8] = 64;
+        pkt[9] = 6;
+        pkt[12..16].copy_from_slice(&[10, 20, 30, 7]);
+        pkt[16..20].copy_from_slice(&me.octets());
+        for _ in 0..IN_PKTS + 50 {
+            net.inject(pkt.clone());
+        }
+        assert_eq!(net.dev.inbound.len(), IN_PKTS);
+        net.poll(Instant::from_millis(1));
+        assert_eq!(net.dev.inbound.len(), 0);
     }
 }

@@ -65,7 +65,7 @@ void ztnx_echo_init(ZtnxEcho *t, const ZtnxAddr *target) {
     t->tcp = t->udp = -1;
 }
 
-int ztnx_echo_step(ZtnxEcho *t, ZtnxEngine *e, uint64_t now_ns) {
+int ztnx_echo_step(ZtnxEcho *t, ZtnxStack *e, uint64_t now_ns) {
     if (t->result) return t->result;
     if (!t->started_ns) {
         t->started_ns = now_ns;

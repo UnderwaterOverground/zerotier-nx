@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-use ztnx_core::l2::{Config, Net, Route};
+use ztnx_core::l2::{Config, Frame, Net, Route};
 use ztnx_core::netstack::{NetError, Netstack};
 use ztnx_core::stack::Stack;
 use ztnx_core::time::Instant;
@@ -76,12 +76,19 @@ const _: () = assert!(core::mem::size_of::<ZtnxStackStats>() == 24);
 
 pub struct ZtnxStack {
     stack: Stack,
+    /// A frame taken from the stack that didn't fit the caller's buffer;
+    /// it is offered again on the next call.
+    held: Option<Frame>,
 }
+
+/// A buffer this large takes any frame; one that still doesn't fit is
+/// dropped rather than held forever.
+const ANY_FRAME: usize = 10240;
 
 /// Creates the stack, with no network yet (see `ztnx_l2_configure`).
 #[no_mangle]
 pub extern "C" fn ztnx_stack_new(now_ns: u64) -> *mut ZtnxStack {
-    Box::into_raw(Box::new(ZtnxStack { stack: Stack::new(Instant::from_nanos(now_ns)) }))
+    Box::into_raw(Box::new(ZtnxStack { stack: Stack::new(Instant::from_nanos(now_ns)), held: None }))
 }
 
 #[no_mangle]
@@ -104,26 +111,30 @@ pub const ZTNX_CHANGED: u32 = 2;
 #[no_mangle]
 pub unsafe extern "C" fn ztnx_stack_end(s: *mut ZtnxStack) -> u32 {
     let f = (*s).stack.end();
-    (f.out_pending as u32 * ZTNX_OUT_PENDING) | (f.changed as u32 * ZTNX_CHANGED)
+    ((f.out_pending || (*s).held.is_some()) as u32 * ZTNX_OUT_PENDING) | (f.changed as u32 * ZTNX_CHANGED)
 }
 
 /// When begin/end should next run if nothing happens first (TCP timers, ARP
 /// retries), in the clock's nanoseconds; UINT64_MAX if never.
 #[no_mangle]
 pub unsafe extern "C" fn ztnx_stack_next_deadline(s: *mut ZtnxStack) -> u64 {
+    if (*s).held.is_some() {
+        return 0;
+    }
     (*s).stack.next_deadline().map_or(u64::MAX, |t| t.as_nanos())
 }
 
 /// Frames are waiting for `ztnx_l2_next_out`.
 #[no_mangle]
 pub unsafe extern "C" fn ztnx_stack_out_pending(s: *mut ZtnxStack) -> bool {
-    (*s).stack.out_pending()
+    (*s).held.is_some() || (*s).stack.out_pending()
 }
 
 /// After a sleep or a change of network underneath: drops what was queued
 /// and re-checks neighbours as they are used.
 #[no_mangle]
 pub unsafe extern "C" fn ztnx_stack_link_reset(s: *mut ZtnxStack) {
+    (*s).held = None;
     (*s).stack.link_reset();
 }
 
@@ -179,6 +190,7 @@ pub unsafe extern "C" fn ztnx_l2_configure(
 /// The network is gone. Sockets stay open; their packets go nowhere.
 #[no_mangle]
 pub unsafe extern "C" fn ztnx_l2_down(s: *mut ZtnxStack) {
+    (*s).held = None;
     (*s).stack.down();
 }
 
@@ -190,12 +202,18 @@ pub unsafe extern "C" fn ztnx_l2_frame_in(s: *mut ZtnxStack, src_mac: u64, dst_m
 }
 
 /// Takes the next frame to send: its payload into `buf`, returning the
-/// length, or 0 if there is none this time (`ztnx_stack_out_pending` says
-/// whether to ask again). A frame larger than `cap` is dropped.
+/// length, or 0 if there is none this time or it needs more room than `cap`
+/// (`ztnx_stack_out_pending` says whether to ask again; the frame is kept
+/// for the next call).
 #[no_mangle]
 pub unsafe extern "C" fn ztnx_l2_next_out(s: *mut ZtnxStack, buf: *mut u8, cap: usize, dst_mac: *mut u64, ethertype: *mut u32) -> usize {
-    while let Some(f) = (*s).stack.next_out() {
+    let s = &mut *s;
+    while let Some(f) = s.held.take().or_else(|| s.stack.next_out()) {
         if f.payload.len() > cap {
+            if cap < ANY_FRAME {
+                s.held = Some(f);
+                return 0;
+            }
             continue;
         }
         core::ptr::copy_nonoverlapping(f.payload.as_ptr(), buf, f.payload.len());

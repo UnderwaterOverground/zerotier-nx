@@ -1,14 +1,11 @@
 // See ztnx_driver.h.
 #include "ztnx_driver.h"
 
-#include "ztnx_dns.h"
-
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <poll.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -21,22 +18,14 @@
 #include <sys/iosupport.h>
 #endif
 
-#ifdef ZTNX_NO_STDIO
-// Builds without newlib's printf (the sysmodule) supply this instead.
-int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...);
-#define snprintf ztnx_snprintf
-#endif
-
-// Datagrams read per readiness report: the rest wait for the next round, so
-// a socket that keeps "returning" something can't hold the loop.
-#define UDP_RECV_BATCH 64
 // Rounds in a row ztnx_driver_poll may skip poll() while the socket is
 // backlogged, before it polls anyway (for the caller's other fds).
 #define UDP_BACKLOG_ROUNDS 8
 // Datagrams are read UDP_STAGED at a time into sbuf (page-aligned: on the
 // Switch it is also the socket service's message buffer), UDP_SLOT bytes
-// each (underlay datagrams fit), and handed to the engine from there.
-#define UDP_STAGED 16
+// each (ZeroTier's physical datagrams are 1432 bytes at most by default),
+// and handed to the caller from there.
+#define UDP_STAGED ZTNX_DRIVER_BATCH
 #define UDP_SLOT 2048
 #define SBUF_SIZE (UDP_STAGED * UDP_SLOT)
 
@@ -45,25 +34,20 @@ static const char *volatile g_step;
 const char *ztnx_driver_step(void) { return g_step; }
 
 struct ZtnxDriver {
-    ZtnxEngine *engine;
-    ztnx_event_fn on_event;
-    void *ctx;
     int udp_fd;
     uint16_t udp_port;
-    int resolve_inline;
-    // Bookkeeping between prepare and dispatch.
-    int poll_udp, poll_udp_fd;
-    uint64_t poll_deadline;  // the engine's next deadline when prepared
-    // Datagrams read but not yet handed to the engine (in sbuf).
+    // Where the UDP socket is in the caller's pollfds (-1: not polled).
+    int poll_udp;
+    // Datagrams of the last recv (in sbuf).
     uint8_t *sbuf;
     struct {
         const uint8_t *data;
         size_t len;
-        ZtnxAddr src;
+        uint32_t ip_be;
+        uint16_t port;
     } staged[UDP_STAGED];
-    int n_staged, staged_all;  // staged_all: the socket was drained
-    int prefetched;            // staged by ztnx_driver_prefetch, without the caller's lock
-    int backlog;               // the last prefetch filled a batch: likely more queued
+    int n_staged;
+    int backlog;               // the last recv filled a batch: likely more queued
     int backlog_rounds;        // polls skipped in a row for it
     // Batched receive (Switch): 1 works, 0 not known yet, -1 off (and the
     // socket service's errno, if a call failed); misses: batches that came
@@ -77,7 +61,7 @@ uint64_t ztnx_driver_now_ns(void) {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-ZtnxDriver *ztnx_driver_new(ZtnxEngine *engine, ztnx_event_fn on_event, void *ctx) {
+ZtnxDriver *ztnx_driver_new(void) {
     ZtnxDriver *d = calloc(1, sizeof *d);
     if (!d) return NULL;
     d->sbuf = aligned_alloc(0x1000, SBUF_SIZE);
@@ -90,12 +74,8 @@ ZtnxDriver *ztnx_driver_new(ZtnxEngine *engine, ztnx_event_fn on_event, void *ct
 #else
     d->mmsg_state = -1;
 #endif
-    d->engine = engine;
-    d->on_event = on_event;
-    d->ctx = ctx;
     d->udp_fd = -1;
-    d->poll_udp_fd = -1;
-    d->resolve_inline = 1;
+    d->poll_udp = -1;
     return d;
 }
 
@@ -106,20 +86,11 @@ void ztnx_driver_free(ZtnxDriver *d) {
     free(d);
 }
 
-void ztnx_driver_resolve_inline(ZtnxDriver *d, int on) { d->resolve_inline = on; }
-
 uint16_t ztnx_driver_udp_port(const ZtnxDriver *d) { return d->udp_fd >= 0 ? d->udp_port : 0; }
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     return flags < 0 ? -1 : fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-}
-
-static void to_ztnx_addr(const struct sockaddr_in *sin, ZtnxAddr *out) {
-    memset(out, 0, sizeof *out);
-    out->family = 4;
-    memcpy(out->ip, &sin->sin_addr, 4);
-    out->port = ntohs(sin->sin_port);
 }
 
 // The socket service drops datagrams that arrive while a socket's receive
@@ -170,6 +141,8 @@ void ztnx_driver_suspend(ZtnxDriver *d) {
         d->udp_fd = -1;
     }
     d->backlog = 0;
+    d->n_staged = 0;
+    d->poll_udp = -1;
 }
 
 int ztnx_driver_resume(ZtnxDriver *d) {
@@ -178,26 +151,37 @@ int ztnx_driver_resume(ZtnxDriver *d) {
     return ztnx_driver_open_udp(d, d->udp_port) == 0 ? 0 : ztnx_driver_open_udp(d, 0);
 }
 
-static void udp_send(ZtnxDriver *d, const ZtnxAddr *to, const uint8_t *data, size_t len) {
+int ztnx_driver_send(ZtnxDriver *d, uint32_t ip_be, uint16_t port, const void *data, size_t len, unsigned int ttl) {
     STEP("UDP send");
-    if (d->udp_fd < 0 || to->family != 4) return;  // IPv6 underlay: not yet
+    if (d->udp_fd < 0) return -1;
     struct sockaddr_in sin = {0};
     sin.sin_family = AF_INET;
-    memcpy(&sin.sin_addr, to->ip, 4);
-    sin.sin_port = htons(to->port);
-    // Best effort, like any UDP send: a full socket buffer drops the datagram.
-    sendto(d->udp_fd, data, len, 0, (struct sockaddr *)&sin, sizeof sin);
+    sin.sin_addr.s_addr = ip_be;
+    sin.sin_port = htons(port);
+    // ZeroTier sends a few packets with a low hop limit on purpose: they open
+    // our side of a NAT and are meant to die before reaching the other.
+    int limited = 0;
+    if (ttl) {
+        const int hops = (int)ttl;
+        limited = setsockopt(d->udp_fd, IPPROTO_IP, IP_TTL, &hops, sizeof hops) == 0;
+        if (!limited) return -1;  // sent at full range it would be the wrong packet
+    }
+    // A full socket buffer drops the datagram.
+    const ssize_t sent = sendto(d->udp_fd, data, len, 0, (struct sockaddr *)&sin, sizeof sin);
+    if (limited) {
+        const int hops = 64;
+        setsockopt(d->udp_fd, IPPROTO_IP, IP_TTL, &hops, sizeof hops);
+    }
+    return sent == (ssize_t)len ? 0 : -1;
 }
 
 // Reads one datagram into buf. Returns its length, or -1 when there's
 // nothing (more) to read.
-static ssize_t udp_read(ZtnxDriver *d, uint8_t *buf, size_t cap, ZtnxAddr *src) {
-    struct sockaddr_in from;
-    socklen_t flen = sizeof from;
-    memset(&from, 0, sizeof from);
-    ssize_t got = recvfrom(d->udp_fd, buf, cap, 0, (struct sockaddr *)&from, &flen);
-    if (got < 0 || from.sin_family != AF_INET) return -1;
-    to_ztnx_addr(&from, src);
+static ssize_t udp_read(ZtnxDriver *d, uint8_t *buf, size_t cap, struct sockaddr_in *from) {
+    socklen_t flen = sizeof *from;
+    memset(from, 0, sizeof *from);
+    ssize_t got = recvfrom(d->udp_fd, buf, cap, 0, (struct sockaddr *)from, &flen);
+    if (got < 0 || from->sin_family != AF_INET) return -1;
     return got;
 }
 
@@ -206,8 +190,11 @@ static int stage_each(ZtnxDriver *d) {
     int n = 0;
     while (n < UDP_STAGED) {
         uint8_t *slot = d->sbuf + (size_t)n * UDP_SLOT;
-        ssize_t got = udp_read(d, slot, UDP_SLOT, &d->staged[n].src);
+        struct sockaddr_in from;
+        ssize_t got = udp_read(d, slot, UDP_SLOT, &from);
         if (got < 0) break;
+        d->staged[n].ip_be = from.sin_addr.s_addr;
+        d->staged[n].port = ntohs(from.sin_port);
         d->staged[n].data = slot;
         d->staged[n++].len = (size_t)got;
     }
@@ -310,7 +297,8 @@ static int stage_batch(ZtnxDriver *d, int *err) {
         // its full capacity.
         if (msg_len >= 0 && (uint64_t)msg_len < len) len = (uint64_t)msg_len;
         if (!data || from.sin_family != AF_INET) continue;
-        to_ztnx_addr(&from, &d->staged[got].src);
+        d->staged[got].ip_be = from.sin_addr.s_addr;
+        d->staged[got].port = ntohs(from.sin_port);
         d->staged[got].data = data;
         d->staged[got++].len = (size_t)len;
     }
@@ -346,15 +334,32 @@ static int stage(ZtnxDriver *d) {
     return stage_each(d);
 }
 
-void ztnx_driver_prefetch(ZtnxDriver *d, const struct pollfd *fds) {
+int ztnx_driver_pollfds(ZtnxDriver *d, struct pollfd *fds, int cap) {
+    int n = 0;
+    d->poll_udp = -1;
+    if (d->udp_fd >= 0 && n < cap) {
+        d->poll_udp = n;
+        fds[n].fd = d->udp_fd;
+        fds[n].events = POLLIN;
+        fds[n++].revents = 0;
+    }
+    return n;
+}
+
+int ztnx_driver_recv(ZtnxDriver *d, const struct pollfd *fds) {
     d->n_staged = 0;
-    d->staged_all = 0;
-    d->prefetched = 1;
-    if (d->poll_udp < 0 || !(fds[d->poll_udp].revents & POLLIN)) return;
-    STEP("UDP prefetch");
+    if (d->udp_fd < 0 || d->poll_udp < 0 || !(fds[d->poll_udp].revents & POLLIN)) return 0;
+    STEP("UDP receive");
     d->n_staged = stage(d);
-    d->staged_all = d->n_staged < UDP_STAGED;
-    d->backlog = !d->staged_all;
+    d->backlog = d->n_staged >= UDP_STAGED;
+    return d->n_staged;
+}
+
+void ztnx_driver_staged(const ZtnxDriver *d, int i, const uint8_t **data, size_t *len, uint32_t *ip_be, uint16_t *port) {
+    *data = d->staged[i].data;
+    *len = d->staged[i].len;
+    *ip_be = d->staged[i].ip_be;
+    *port = d->staged[i].port;
 }
 
 int ztnx_driver_poll(ZtnxDriver *d, struct pollfd *fds, int nfds, int wait_ms) {
@@ -364,116 +369,13 @@ int ztnx_driver_poll(ZtnxDriver *d, struct pollfd *fds, int nfds, int wait_ms) {
         fds[d->poll_udp].revents = POLLIN;
         return 1;
     }
-    d->backlog = 0;  // the prefetch after this poll sets it again
+    d->backlog = 0;  // the recv after this poll sets it again
     d->backlog_rounds = 0;
+    STEP("poll");
     return poll(fds, (nfds_t)nfds, wait_ms);
-}
-
-// Hands the staged datagrams to the engine, then reads and hands over more
-// until the socket is drained (or UDP_RECV_BATCH, so it can't hold the loop).
-// After a prefetch it reads no more: the caller holds its lock now, and an
-// app reading what we deliver would wait out every read. A video frame
-// arrives as a burst of datagrams, and delivered all at once it overflows
-// the app's socket queue; the rest is read by the next round's prefetch.
-static void udp_receive(ZtnxDriver *d) {
-    int handled = 0;
-    const int prefetched = d->prefetched;
-    d->prefetched = 0;
-    for (;;) {
-        for (int i = 0; i < d->n_staged; i++)
-            ztnx_engine_udp(d->engine, &d->staged[i].src, d->staged[i].data, d->staged[i].len, ztnx_driver_now_ns());
-        handled += d->n_staged;
-        const int drained = d->staged_all;
-        d->n_staged = 0;
-        d->staged_all = 0;
-        if (drained || prefetched || handled >= UDP_RECV_BATCH) return;
-        STEP("UDP receive");
-        d->n_staged = stage(d);
-        d->staged_all = d->n_staged < UDP_STAGED;
-    }
 }
 
 int ztnx_driver_batched_receive(ZtnxDriver *d, int *bsd_errno) {
     if (bsd_errno) *bsd_errno = d->mmsg_errno;
     return d->mmsg_state;
-}
-
-// Answers a RESOLVE event with a blocking lookup (see ztnx_driver_resolve_inline).
-static void resolve_endpoint(ZtnxDriver *d, const ZtnxEvent *ev) {
-    STEP("endpoint lookup");
-    uint32_t ip;
-    if (ztnx_resolve_ipv4(ev->text, &ip) != 0) return;
-    ZtnxAddr addr;
-    memset(&addr, 0, sizeof addr);
-    addr.family = 4;
-    memcpy(addr.ip, &ip, 4);
-    addr.port = ev->port;
-    ztnx_engine_set_peer_endpoint(d->engine, ev->value, &addr, ztnx_driver_now_ns());
-}
-
-// Drains engine I/O requests and events.
-static void pump_engine(ZtnxDriver *d) {
-    STEP("engine I/O");
-    ZtnxIo io;
-    while (ztnx_engine_poll_io(d->engine, &io))
-        if (io.kind == ZTNX_IO_SEND_UDP) udp_send(d, &io.addr, io.data, io.len);
-    ZtnxEvent ev;
-    while (ztnx_engine_poll_event(d->engine, &ev)) {
-        if (ev.kind == ZTNX_EVENT_RESOLVE && d->resolve_inline) resolve_endpoint(d, &ev);
-        if (d->on_event) d->on_event(d->ctx, &ev);
-    }
-}
-
-void ztnx_driver_pump(ZtnxDriver *d) { pump_engine(d); }
-
-int ztnx_driver_prepare(ZtnxDriver *d, struct pollfd *fds, int cap, int max_wait_ms, int *wait_ms) {
-    uint64_t now = ztnx_driver_now_ns();
-    if (now >= ztnx_engine_next_deadline(d->engine)) ztnx_engine_timeout(d->engine, now);
-    pump_engine(d);
-
-    int n = 0;
-    d->poll_udp = -1;
-    d->poll_udp_fd = -1;
-    if (d->udp_fd >= 0 && n < cap) {
-        d->poll_udp = n;
-        d->poll_udp_fd = d->udp_fd;
-        fds[n].fd = d->udp_fd;
-        fds[n].events = POLLIN;
-        fds[n++].revents = 0;
-    }
-
-    uint64_t deadline = ztnx_engine_next_deadline(d->engine);
-    d->poll_deadline = deadline;
-    now = ztnx_driver_now_ns();
-    int wait = max_wait_ms;
-    if (deadline <= now) {
-        wait = 0;
-    } else if ((deadline - now) / 1000000 < (uint64_t)wait) {
-        wait = (int)((deadline - now) / 1000000) + 1;
-    }
-    *wait_ms = wait;
-    return n;
-}
-
-int ztnx_driver_poll_stale(ZtnxDriver *d, uint64_t until_ns) {
-    if (d->udp_fd != d->poll_udp_fd) return 1;
-    // The poll's timeout is rounded up past the deadline it was set for, so
-    // only a deadline earlier than that one is news.
-    const uint64_t deadline = ztnx_engine_next_deadline(d->engine);
-    return deadline < d->poll_deadline && deadline < until_ns;
-}
-
-void ztnx_driver_dispatch(ZtnxDriver *d, const struct pollfd *fds) {
-    if (d->poll_udp >= 0 && (fds[d->poll_udp].revents & POLLIN)) udp_receive(d);
-    pump_engine(d);
-}
-
-int ztnx_driver_run_once(ZtnxDriver *d, int max_wait_ms) {
-    struct pollfd fds[ZTNX_DRIVER_MAX_FDS];
-    int wait;
-    int n = ztnx_driver_prepare(d, fds, ZTNX_DRIVER_MAX_FDS, max_wait_ms, &wait);
-    int rc = poll(fds, (nfds_t)n, wait);
-    if (rc < 0 && errno != EINTR) return -1;
-    if (rc > 0) ztnx_driver_dispatch(d, fds);
-    return 0;
 }

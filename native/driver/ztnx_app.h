@@ -18,7 +18,6 @@ void ztnx_platform_random(uint8_t *buf, size_t len);
 // Nintendo's NTP blocked by DNS filters), and TLS certificate checks need a
 // roughly correct date.
 //
-// WireGuard needs it too: handshake timestamps must never go backwards.
 //
 // Returns `system_unix` if it is plausible: no earlier than the build date and
 // no more than ZTNX_CLOCK_MAX_AHEAD after it. Otherwise asks `host` (e.g.
@@ -30,7 +29,7 @@ uint64_t ztnx_sane_unix_time(uint64_t system_unix, const char *host, bool *corre
 // Parses an RFC 7231 IMF-fixdate ("Fri, 02 Oct 2026 10:24:03 GMT"). 0 on error.
 uint64_t ztnx_parse_http_date(const char *s);
 
-// TCP + UDP echo against port 7 of a tunnel peer.
+// TCP + UDP echo against port 7 of a device on the network.
 typedef struct {
     ZtnxAddr target;
     uint64_t started_ns, last_udp_ns;
@@ -45,8 +44,9 @@ typedef struct {
 // Parses "a.b.c.d" into an IPv4 ZtnxAddr. Returns 0 on success.
 int ztnx_parse_ipv4(const char *s, uint16_t port, ZtnxAddr *out);
 void ztnx_echo_init(ZtnxEcho *t, const ZtnxAddr *target);
-// Advances the test; returns its result (0 while still running).
-int ztnx_echo_step(ZtnxEcho *t, ZtnxEngine *e, uint64_t now_ns);
+// Advances the test; returns its result (0 while still running). Call
+// between ztnx_stack_begin and ztnx_stack_end.
+int ztnx_echo_step(ZtnxEcho *t, ZtnxStack *e, uint64_t now_ns);
 
 #ifdef __cplusplus
 }

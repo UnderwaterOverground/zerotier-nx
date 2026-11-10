@@ -1,12 +1,15 @@
-// Runs a ztnx engine on its own thread and lets other threads use it.
+// Runs the engine on its own thread and lets other threads use the stack.
 //
-// The engine and driver are not thread-safe; everything goes through one
-// mutex, which the engine thread drops only while blocked in poll(). Callers
-// that change engine state (overlay socket calls) get their I/O performed
-// immediately and wake the engine thread when its poll set or next deadline
-// changed (e.g. a peer's endpoint became known).
-// Threads waiting for socket readiness block on a condition variable that
-// is signalled whenever the engine processed input.
+// Two things live here. The stack (ztnx.h: the TCP/IP stack and its Ethernet
+// layer) is not thread-safe and is guarded by one mutex; any thread may use
+// it through With/Read/WaitFor. The engine (ZeroTier's core, or a fake in
+// tests) is used by the engine thread alone, through EngineOps, and never
+// with that mutex held: its call paths need more stack than other threads
+// have, and it may be slow (it writes state to the SD card).
+//
+// So a socket call from another thread only changes the stack and, if that
+// left frames to send or a nearer timer, wakes the engine thread, which
+// carries frames between the stack and the engine once per round.
 #pragma once
 
 #include <atomic>
@@ -16,41 +19,68 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
+
+#include <pthread.h>
 
 #include "ztnx.h"
 #include "ztnx_driver.h"
 
 namespace ztnx {
 
-struct RuntimeConfig {
-    std::string conf_path;  // the wg-quick style .conf
-    uint16_t udp_port = 0;  // 0: the conf's ListenPort, else any
-    // Called on the engine thread with the lock held; must not call back in.
-    std::function<void(const ZtnxEvent &)> on_event;
+// A frame the engine received from the network (as ZtnxFrame in
+// ztnx_engine.h).
+struct EngineFrame {
+    uint64_t src_mac;
+    uint64_t dst_mac;
+    uint32_t ethertype;
+    uint32_t len;
+    const uint8_t *data;
+};
+
+// What the loop needs from the engine. Every function is called on the
+// engine thread with the runtime lock not held.
+struct EngineOps {
+    void *ctx = nullptr;
+    // A datagram arrived on the UDP socket.
+    void (*wire_in)(void *ctx, uint32_t ip_be, uint16_t port, const uint8_t *data, size_t len) = nullptr;
+    // Frames received since frames_done, oldest first; valid until then.
+    size_t (*frames)(void *ctx, const EngineFrame **out) = nullptr;
+    void (*frames_done)(void *ctx) = nullptr;
+    // True when the engine wants its frames taken before more datagrams.
+    bool (*frames_high)(void *ctx) = nullptr;
+    // Sends a frame into the network.
+    void (*frame_out)(void *ctx, uint64_t dst_mac, uint32_t ethertype, const uint8_t *data, size_t len) = nullptr;
+    // Runs the engine's timers if they are due. Returns milliseconds until
+    // they next are.
+    int (*background)(void *ctx) = nullptr;
+    // After a batch of the calls above: act on what the engine reported
+    // meanwhile (a new network configuration, events). May use With().
+    void (*after)(void *ctx) = nullptr;
+    // A command from Post().
+    void (*command)(void *ctx, uint32_t command, uint64_t arg) = nullptr;
+    // The network underneath is (back) up: at start and after each resume.
+    void (*network_up)(void *ctx) = nullptr;
 };
 
 class Runtime {
 public:
     using Clock = std::chrono::steady_clock;
 
-#ifndef ZTNX_NO_STDIO
-    static std::unique_ptr<Runtime> Start(RuntimeConfig cfg, std::string *error);
-#endif
-    // Wraps an engine/driver the caller set up (and keeps owning); the
-    // caller then runs Run() on a thread of its own. Events go to the
-    // callback the caller gave ztnx_driver_new.
-    static std::unique_ptr<Runtime> Adopt(ZtnxEngine *engine, ZtnxDriver *driver, std::string *error);
-    // The engine loop, for Adopt()ed runtimes. on_tick runs with the lock held
-    // (it may use the driver), at least once a second and at most every 50 ms.
-    // after_tick, if given, runs right after each on_tick on the same thread
-    // with the lock released, for slow work that doesn't touch the engine
-    // (files, other services), which would keep callers waiting.
-    // Returns after Stop().
-    void Run(const std::function<void(ZtnxDriver *)> &on_tick, const std::function<void()> &after_tick = nullptr);
+    // Wraps a stack and a driver the caller set up (and keeps owning) and
+    // the engine behind `ops`.
+    static std::unique_ptr<Runtime> Create(ZtnxStack *stack, ZtnxDriver *driver, const EngineOps &ops, std::string *error);
+
+    // The engine loop; returns after Stop(). on_tick runs on this thread
+    // without the lock, at least once a second and at most every 50 ms.
+    void Run(const std::function<void()> &on_tick = nullptr);
+    // Runs the loop on a new thread with `stack_size` bytes of stack (the
+    // engine needs far more than a thread's default on the Switch; hosts use
+    // the same size so an overflow shows up there too). The destructor stops
+    // and joins it.
+    bool StartThread(size_t stack_size, std::function<void()> on_tick = nullptr);
     void Stop();
 
-    // Suspend() has the loop close every socket the engine and the runtime
+    // Suspend() has the loop close every socket the driver and the runtime
     // own and idle without network I/O until Resume(). Independent reasons
     // (sleep, a user pause, ...) stack: I/O resumes once none is left.
     // Suspend returns once the sockets are closed (false: timed out).
@@ -76,72 +106,102 @@ public:
         on_suspend_ = std::move(on_suspend);
         on_resume_ = std::move(on_resume);
     }
+
+    // Hands a command to the engine thread (EngineOps::command), for callers
+    // that must not run engine code themselves. False if too many are
+    // waiting already.
+    bool Post(uint32_t command, uint64_t arg);
+
     ~Runtime();
     Runtime(const Runtime &) = delete;
     Runtime &operator=(const Runtime &) = delete;
 
-    // Runs f(engine) with exclusive access, then performs the I/O it queued.
+    // Runs f(stack) with exclusive access, between ztnx_stack_begin and
+    // ztnx_stack_end, and wakes the engine thread if that left it work.
     template <class F>
-    auto With(F &&f) -> decltype(f(static_cast<ZtnxEngine *>(nullptr))) {
+    auto With(F &&f) -> decltype(f(static_cast<ZtnxStack *>(nullptr))) {
         // The loop first: a caller making call after call would otherwise
-        // take the lock back before the loop thread runs, and the engine's
-        // own socket (incoming datagrams, replies) would go unread. Callers
-        // block rather than spin: spinning threads can starve the socket
-        // service the lock holder is waiting on.
-        if (loop_wants_lock_.load(std::memory_order_acquire)) WaitForLoop();
+        // take the lock back before the loop thread runs, and frames in both
+        // directions would wait. Callers block rather than spin: spinning
+        // threads can starve the socket service the loop is waiting on.
+        if (!on_engine_thread_ && loop_wants_lock_.load(std::memory_order_acquire)) WaitForLoop();
         std::unique_lock<std::mutex> lock(mu_);
-        InternalScope internal;
-        if constexpr (std::is_void_v<decltype(f(engine_))>) {
-            f(engine_);
+        LockScope held;
+        ztnx_stack_begin(stack_, ztnx_driver_now_ns());
+        if constexpr (std::is_void_v<decltype(f(stack_))>) {
+            f(stack_);
             AfterCall();
         } else {
-            auto r = f(engine_);
+            auto r = f(stack_);
             AfterCall();
             return r;
         }
     }
 
-    // Like With, for calls that only read engine state (readiness, taking a
-    // queued datagram): nothing for the engine to send afterwards, so no
-    // pump and no wake-up.
+    // Like With, for calls that only read the stack's state (readiness,
+    // taking a queued datagram): nothing to send afterwards, so the stack is
+    // not run and nobody is woken.
     template <class F>
-    auto Read(F &&f) -> decltype(f(static_cast<ZtnxEngine *>(nullptr))) {
-        if (loop_wants_lock_.load(std::memory_order_acquire)) WaitForLoop();
+    auto Read(F &&f) -> decltype(f(static_cast<ZtnxStack *>(nullptr))) {
+        if (!on_engine_thread_ && loop_wants_lock_.load(std::memory_order_acquire)) WaitForLoop();
         std::unique_lock<std::mutex> lock(mu_);
-        InternalScope internal;
-        return f(engine_);
+        LockScope held;
+        return f(stack_);
     }
 
-    // Blocks until ready(engine) returns true or the deadline passes
+    // Blocks until ready(stack) returns true or the deadline passes
     // (nullptr = no deadline). Returns ready()'s final value.
-    bool WaitFor(const std::function<bool(ZtnxEngine *)> &ready, const Clock::time_point *deadline);
+    bool WaitFor(const std::function<bool(ZtnxStack *)> &ready, const Clock::time_point *deadline);
 
     // Wakes all waiters (e.g. a socket was closed under them).
     void NotifyAll() { cv_.notify_all(); }
 
-    // True while the current thread is executing engine/driver code (its own
-    // sockets). Interposition layers must pass such calls straight through.
+    // True while the current thread is executing the runtime's own code (its
+    // sockets, the engine's files). Interposition layers must pass such
+    // calls straight through.
     static bool InInternal() { return internal_depth_ > 0; }
+    // For assertions: this thread is the engine thread / holds the lock.
+    static bool OnEngineThread() { return on_engine_thread_; }
+    static bool HoldsLock() { return lock_depth_ > 0; }
+
+    struct Stats {
+        uint64_t rounds;  // loop rounds
+        uint64_t wakes;   // wake-up datagrams sent to the engine thread
+    };
+    Stats GetStats() const { return {rounds_.load(), wakes_.load()}; }
 
 private:
     Runtime() = default;
-    void Loop(const std::function<void(ZtnxDriver *)> *on_tick, const std::function<void()> *after_tick);
+    void Loop(const std::function<void()> *on_tick);
     void AfterCall();
     void Wake();
+    // The loop's locked part of a round. Returns how many frames it put in
+    // the out buffer; *wait_ms gets how long the loop may sleep.
+    int Exchange(std::unique_lock<std::mutex> &lock, int engine_wait_ms, int *wait_ms);
+    bool HandleSuspend(std::unique_lock<std::mutex> &lock);
+    void LockForLoop(std::unique_lock<std::mutex> &lock);
 
     struct InternalScope {
         InternalScope() { internal_depth_++; }
         ~InternalScope() { internal_depth_--; }
     };
+    struct LockScope {
+        InternalScope internal;
+        LockScope() { lock_depth_++; }
+        ~LockScope() { lock_depth_--; }
+    };
     static thread_local int internal_depth_;
+    static thread_local int lock_depth_;
+    static thread_local bool on_engine_thread_;
 
-    RuntimeConfig cfg_;
     std::mutex mu_;
     std::condition_variable cv_;
-    ZtnxEngine *engine_ = nullptr;
+    ZtnxStack *stack_ = nullptr;
     ZtnxDriver *driver_ = nullptr;
-    bool owned_ = true;  // engine/driver freed by the destructor
-    std::thread thread_;
+    EngineOps ops_;
+    pthread_t thread_{};
+    bool thread_started_ = false;
+    std::function<void()> thread_tick_;
     bool stop_ = false;
     uint32_t suspend_reasons_ = 0;
     std::atomic<uint32_t> async_suspend_{0};
@@ -152,17 +212,44 @@ private:
     std::atomic<bool> suspended_flag_{false};
     std::function<void()> on_suspend_, on_resume_;
     bool suspended_ = false;
+    bool resumed_ = true;  // tell the engine the network is up (also at start)
     int wake_rx_ = -1, wake_tx_ = -1;
-    // While the loop is in poll() (it dropped the lock): until when it
-    // waits at most (ztnx_driver_now_ns).
-    bool polling_ = false;
+    // True from when the loop decides to sleep in poll() until it is back.
+    // A caller that leaves work for the engine while it is true sends one
+    // wake-up and clears it, so a burst of calls costs one datagram.
+    std::atomic<bool> polling_{false};
+    // Until when that poll() waits at most (ztnx_driver_now_ns).
     uint64_t poll_until_ns_ = 0;
-    // Set (under gate_mu_) while the loop, back from poll(), waits for the
-    // lock; callers wait on gate_cv_ until it has it.
+    // A With() on the engine thread itself left work: don't sleep yet.
+    bool engine_dirty_ = false;
+    // Set (under gate_mu_) while the loop waits for the lock; callers wait
+    // on gate_cv_ until it has it.
     std::atomic<bool> loop_wants_lock_{false};
     std::mutex gate_mu_;
     std::condition_variable gate_cv_;
     void WaitForLoop();
+
+    static constexpr int kMaxCommands = 4;
+    struct Command {
+        uint32_t command;
+        uint64_t arg;
+    };
+    Command commands_[kMaxCommands];
+    int n_commands_ = 0;
+
+    // Frames taken from the stack under the lock, sent after releasing it.
+    static constexpr int kOutFrames = 16;
+    static constexpr size_t kOutBytes = 24 * 1024;
+    struct OutFrame {
+        uint64_t dst_mac;
+        uint32_t ethertype;
+        uint32_t len;
+        uint32_t offset;
+    };
+    OutFrame out_[kOutFrames];
+    std::unique_ptr<uint8_t[]> out_buf_;
+
+    std::atomic<uint64_t> rounds_{0}, wakes_{0};
 };
 
 }  // namespace ztnx

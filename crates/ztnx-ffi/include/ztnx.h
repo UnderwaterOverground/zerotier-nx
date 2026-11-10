@@ -132,8 +132,9 @@ void ztnx_l2_down(ZtnxStack *s);
 void ztnx_l2_frame_in(ZtnxStack *s, uint64_t src_mac, uint64_t dst_mac, uint32_t ethertype,
                       const uint8_t *data, size_t len);
 // Takes the next frame to send: its payload into buf, returning the length,
-// or 0 if there is none this time (ztnx_stack_out_pending says whether to ask
-// again). The source MAC is ours.
+// or 0 if there is none this time or it needs more room than cap
+// (ztnx_stack_out_pending says whether to ask again; a frame that didn't fit
+// is kept for the next call). The source MAC is ours.
 size_t ztnx_l2_next_out(ZtnxStack *s, uint8_t *buf, size_t cap, uint64_t *dst_mac, uint32_t *ethertype);
 
 // ---- Overlay sockets (network side) ------------------------------------------

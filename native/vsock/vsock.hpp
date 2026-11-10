@@ -111,7 +111,7 @@ public:
     // with any on-link route, and special ones (loopback, link-local,
     // multicast, broadcast), which a 0.0.0.0/0 route would otherwise take.
     static bool IsTunnel(const sockaddr *addr);
-    // The engine's routes (ztnx_engine_routes), after each reload. At most
+    // The network's routes (see ZtLink), whenever its configuration changes. At most
     // MaxRoutes are used.
     static constexpr size_t MaxRoutes = 64;
     static void SetRoutes(const ZtnxPrefix *routes, size_t n);
@@ -178,7 +178,7 @@ private:
     // Waits for virtual readiness bits (ZTNX_READABLE/WRITABLE/HUP) on id.
     bool WaitEngine(int32_t id, uint32_t mask, int timeout_ms);
     // rt_.WaitFor in slices, stopping early if the caller is no longer alive.
-    bool WaitSliced(const std::function<bool(ZtnxEngine *)> &ready, const Runtime::Clock::time_point *deadline);
+    bool WaitSliced(const std::function<bool(ZtnxStack *)> &ready, const Runtime::Clock::time_point *deadline);
 
     Backend &real_;
     Runtime &rt_;

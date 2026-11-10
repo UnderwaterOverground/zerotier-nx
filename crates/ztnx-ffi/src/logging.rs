@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// `level`: 1 error, 2 warn, 3 info, 4 debug, 5 trace. `msg` is NUL-terminated
 /// and only valid during the call.
-pub type WgnxLogFn = unsafe extern "C" fn(level: u32, msg: *const c_char);
+pub type ZtnxLogFn = unsafe extern "C" fn(level: u32, msg: *const c_char);
 
 static CALLBACK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
@@ -27,7 +27,7 @@ impl log::Log for CLogger {
         let _ = write!(buf, "{}: {}", record.target(), record.args());
         let n = buf.n.min(buf.b.len() - 1);
         buf.b[n] = 0;
-        let f: WgnxLogFn = unsafe { core::mem::transmute(cb) };
+        let f: ZtnxLogFn = unsafe { core::mem::transmute(cb) };
         unsafe { f(record.level() as u32, buf.b.as_ptr().cast()) };
     }
 
@@ -53,7 +53,7 @@ static LOGGER: CLogger = CLogger;
 
 /// Installs `cb` for log records up to `max_level` (1-5; 0 disables).
 #[no_mangle]
-pub extern "C" fn wgnx_set_log_callback(cb: Option<WgnxLogFn>, max_level: u32) {
+pub extern "C" fn ztnx_set_log_callback(cb: Option<ZtnxLogFn>, max_level: u32) {
     CALLBACK.store(cb.map_or(core::ptr::null_mut(), |f| f as *mut ()), Ordering::Release);
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(match max_level {

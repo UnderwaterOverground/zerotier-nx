@@ -1,6 +1,6 @@
 # Third-party notices
 
-wireguard-nx is built from the following third-party code. Their licences
+zerotier-nx is built from the following third-party code. Their licences
 apply to the parts they cover; see each project for the full text.
 
 ## Bundled or linked into the console binaries
@@ -14,8 +14,8 @@ apply to the parts they cover; see each project for the full text.
 
 ## Rust crates in the engine
 
-Generated from `cargo tree -p wgnx-ffi -e normal --target all`. Where a crate
-offers a choice of licences, wireguard-nx uses it under the MIT, BSD or ISC
+Generated from `cargo tree -p ztnx-ffi -e normal --target all`. Where a crate
+offers a choice of licences, zerotier-nx uses it under the MIT, BSD or ISC
 option, all of which are compatible with GPL-2.0.
 
 | Crate | Version | Licence |

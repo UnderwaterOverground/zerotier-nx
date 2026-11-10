@@ -1,6 +1,6 @@
-# Setting up wireguard-nx
+# Setting up zerotier-nx
 
-wireguard-nx connects a modded Switch to your own
+zerotier-nx connects a modded Switch to your own
 [WireGuard](https://www.wireguard.com) server. It runs in the background
 from boot. Homebrew such as Moonlight can then reach your PC and home network
 through the tunnel, from anywhere.
@@ -26,18 +26,18 @@ card, adding them to the folders already there:
 
 | Path | What |
 |---|---|
-| `atmosphere/contents/4200000000005747/` | The sysmodule. `flags/boot2.flag` makes it start at boot. |
-| `switch/.overlays/wireguard-nx.ovl` | The overlay: status, peers, a pause switch, config picker, stop and start |
-| `config/wireguard-nx/config.ini.example` | Settings template (optional; see below) |
-| `config/wireguard-nx/<name>.conf` | Your tunnel configuration, from your server (see below) |
+| `atmosphere/contents/4200000000005A54/` | The sysmodule. `flags/boot2.flag` makes it start at boot. |
+| `switch/.overlays/zerotier-nx.ovl` | The overlay: status, peers, a pause switch, config picker, stop and start |
+| `config/zerotier-nx/config.ini.example` | Settings template (optional; see below) |
+| `config/zerotier-nx/<name>.conf` | Your tunnel configuration, from your server (see below) |
 
 Then restart the console.
 
 ## The configuration file
 
-wireguard-nx reads the same `[Interface]` / `[Peer]` file as `wg-quick` and
+zerotier-nx reads the same `[Interface]` / `[Peer]` file as `wg-quick` and
 every WireGuard app. Your server makes one when you add a peer for the
-Switch; save it in `config/wireguard-nx` on the SD card. Any name ending
+Switch; save it in `config/zerotier-nx` on the SD card. Any name ending
 `.conf` works; with several, pick one under **Config** in the overlay.
 
 The `PrivateKey` line is the Switch's private key. Your server makes it
@@ -133,14 +133,14 @@ and anyone with it can join your network as the Switch.
   why it was skipped.
   - Atmosphère's Nintendo blocking is left alone, and names containing
     "nintendo" are never added.
-  - If there's no hosts file, names stay off. wireguard-nx never creates
+  - If there's no hosts file, names stay off. zerotier-nx never creates
     one. `hosts=off` in `config.ini` turns this off.
 - **Connected notice:** after each boot, a 5-second toast shows
   "Connected. IP: 10.x.y.z" the first time a peer handshakes. It doesn't
   appear again on wake or reconnect. Turn it off with **Connection notice**
   in the overlay.
 - **Update notice:** after each boot, 10 seconds after it connects,
-  wireguard-nx asks GitHub for the latest release. If it's newer than the
+  zerotier-nx asks GitHub for the latest release. If it's newer than the
   installed one, a 10-second toast says so. If GitHub can't be reached,
   nothing happens (the reason is in `sysmodule.log`). This request shows
   GitHub the console's public IP address, as any web request does. Nothing
@@ -150,24 +150,24 @@ and anyone with it can join your network as the Switch.
   minutes (a live session), yellow if older, grey if never. Press **A** on
   a peer for its endpoint, how much was sent and received, keepalive,
   allowed IPs and whether it uses a pre-shared key.
-- **Config:** with several `.conf` files in `config/wireguard-nx`, the
+- **Config:** with several `.conf` files in `config/zerotier-nx`, the
   overlay's **Config** page switches between them at once. The choice is
   written to `config.ini` (`conf=`), so it stays at the next boot. A
   `ListenPort` change takes effect at the next start.
 - **Pause:** use the **WireGuard** switch in the overlay. While paused,
   tunnel connections fail at once and everything else works normally.
-- **Stop and start:** **Stop wireguard-nx** in the overlay ends the
+- **Stop and start:** **Stop zerotier-nx** in the overlay ends the
   sysmodule and frees its memory, until the next boot or until you press
-  **Start wireguard-nx**. Its boot setting doesn't change.
+  **Start zerotier-nx**. Its boot setting doesn't change.
   - Close homebrew apps first. Stop is refused while one has sockets through
-    wireguard-nx, because closing them would break the app. It's also
+    zerotier-nx, because closing them would break the app. It's also
     refused for a moment around sleep and wake.
   - With `mitm=homebrew,sys-ftpd`, stopping restarts sys-ftpd, which drops
     any FTP connection.
   - Start works whether or not the boot setting is on, but not while
-    `config/wireguard-nx/disabled` exists.
+    `config/zerotier-nx/disabled` exists.
 - **Turn it off completely:** in the **Sysmodules** overlay
-  (ovl-sysmodules), turn off wireguard-nx's boot setting, then use **Stop**
+  (ovl-sysmodules), turn off zerotier-nx's boot setting, then use **Stop**
   or restart. The Sysmodules overlay can't stop it itself: Atmosphère would
   freeze if its socket hook disappeared without being removed first.
 
@@ -185,14 +185,14 @@ never touched). Inbound connections work the same way: anything your peers
 may send reaches homebrew listening on the Switch (an FTP server, say), as
 with any WireGuard interface. There are no access rules beyond that.
 
-## Settings (`config/wireguard-nx/config.ini`)
+## Settings (`config/zerotier-nx/config.ini`)
 
 All settings are optional. They take effect after a restart (the overlay's
 Config page switches `.conf` files at once).
 
 | Key | Default | What |
 |---|---|---|
-| `conf` | the only `.conf` there is, else `wg0.conf` | Which `.conf` in `config/wireguard-nx` to use |
+| `conf` | the only `.conf` there is, else `wg0.conf` | Which `.conf` in `config/zerotier-nx` to use |
 | `hosts` | `on` | `off` stops writing peer names to the hosts file |
 | `aliases` | `on` | `off` writes peers' real private addresses to the hosts file, not stand-ins (see [Using it](#using-it)) |
 | `connect_notice` | `on` | `off` turns off the "Connected" toast at boot (as does the overlay switch) |
@@ -205,7 +205,7 @@ Config page switches `.conf` files at once).
 ### Home-screen forwarders
 
 Homebrew started from a home-screen forwarder runs as its own title, not
-through hbmenu. wireguard-nx still serves it when its title ID doesn't start
+through hbmenu. zerotier-nx still serves it when its title ID doesn't start
 with `01`, which is the case for forwarders made by the usual tools (their
 IDs mostly start with `05`); Nintendo's games and apps all start with `01`.
 
@@ -227,10 +227,10 @@ this off.
 
 With `mitm=homebrew,sys-ftpd`, the sys-ftpd sysmodule is also reachable on
 the Switch's tunnel address, e.g. `ftp://10.253.0.2:5000`. This costs about
-70 KB more memory, and wireguard-nx restarts sys-ftpd once at boot to take
+70 KB more memory, and zerotier-nx restarts sys-ftpd once at boot to take
 it over. FTP on the local network keeps working as before.
 
-sys-ftpd itself has two limits, with or without wireguard-nx:
+sys-ftpd itself has two limits, with or without zerotier-nx:
 - **Speed:** about 11–14 Mbit/s on the local network and less through the
   tunnel.
 - **Back-to-back transfers:** after two large transfers in a row, it refuses
@@ -246,7 +246,7 @@ to `mitm=homebrew`.
 
 ## Memory
 
-wireguard-nx uses exactly **2.5 MB** of the memory the system sets aside for
+zerotier-nx uses exactly **2.5 MB** of the memory the system sets aside for
 sysmodules, taken once when it starts. It never grows or shrinks: about
 0.8 MB of code and 1.7 MB of data, including a fixed heap of about 950 KB.
 Busy tunnel sockets use more of that heap, up to the `overlay_budget_kb`
@@ -259,7 +259,7 @@ limit.
   - This is the room left under the system's limit for sysmodules, the
     figure those crashes depend on. Other overlays, such as Sysmodules, may
     show a higher figure: they count unused memory instead.
-- At boot wireguard-nx starts before most other sysmodules, so it can't
+- At boot zerotier-nx starts before most other sysmodules, so it can't
   tell yet how much they will leave. It watches for the first two minutes:
   if less than 512 KB was ever free, it says so in a notification (with
   Ultrahand) and in the log, and the overlay's memory line turns red while
@@ -270,7 +270,7 @@ limit.
 ## Troubleshooting
 
 - **The overlay says "No config".**
-  - There's no `.conf` to use in `config/wireguard-nx`, and the message says
+  - There's no `.conf` to use in `config/zerotier-nx`, and the message says
     what to do: copy one there, or, if `config.ini`'s `conf=` names a file
     that isn't there, pick one of the others on the Config page.
   - A file saved as `wg0.conf.txt` (Windows hides the `.txt` by default) is
@@ -286,7 +286,7 @@ limit.
     pre-shared key if there is one. **Connections** shows per peer whether
     its endpoint is resolved and when it last answered.
   - A console whose clock is badly wrong can't handshake either (WireGuard
-    checks timestamps). wireguard-nx corrects a wrong clock from the
+    checks timestamps). zerotier-nx corrects a wrong clock from the
     network; if the log says it couldn't, set the clock.
 - **The overlay says "Idle".**
   - It was connected, but no peer has answered for 3 minutes. Without
@@ -294,24 +294,24 @@ limit.
     next connection handshakes again. If it stays like this while an app is
     trying, the server has gone away.
 - **The overlay says the sysmodule isn't running.**
-  - Check that `atmosphere/contents/4200000000005747/flags/boot2.flag`
+  - Check that `atmosphere/contents/4200000000005A54/flags/boot2.flag`
     exists.
-  - If `config/wireguard-nx/crashed` exists, wireguard-nx turned itself off.
+  - If `config/zerotier-nx/crashed` exists, zerotier-nx turned itself off.
     It does this after 3 boots in a row that ended within 3 minutes, or 2
     sleeps the console never woke from. The file says which. **Turn back on**
-    in the overlay deletes it and starts wireguard-nx again.
-  - If `config/wireguard-nx/disabled` exists, delete it.
+    in the overlay deletes it and starts zerotier-nx again.
+  - If `config/zerotier-nx/disabled` exists, delete it.
   - If tailscale-nx is also installed and running, only one of the two can
     serve homebrew: turn the other off in Sysmodules.
 - **The overlay says "No internet connection."**
-  - The Switch lost its internet connection. wireguard-nx reconnects on its
+  - The Switch lost its internet connection. zerotier-nx reconnects on its
     own once it's back. On hotel or café Wi-Fi, sign in to the network
     first.
 - **The overlay says "Not responding".**
-  - wireguard-nx has stopped answering. Restart the console, and send us
+  - zerotier-nx has stopped answering. Restart the console, and send us
     `sysmodule.log.1` (the boot before the restart).
 - **What happened?**
-  - The log is in `config/wireguard-nx/sysmodule.log`, and the previous
+  - The log is in `config/zerotier-nx/sysmodule.log`, and the previous
     boot's log is in `sysmodule.log.1`.
   - To watch it live, set `log_udp` to a computer's address.
 - **An app reports "no buffer space" (errno 105).**
@@ -328,5 +328,5 @@ limit.
     shows **Connected**.
 
 Still stuck? Ask on [Discord](https://discord.gg/GjUuBEqRYb) or
-[open an issue](https://github.com/UnderwaterOverground/wireguard-nx/issues),
+[open an issue](https://github.com/UnderwaterOverground/zerotier-nx/issues),
 with your `sysmodule.log`.

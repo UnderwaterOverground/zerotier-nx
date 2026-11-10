@@ -1,4 +1,4 @@
-//! C ABI over wgnx-core. See `include/wgnx.h` for the C side of this contract.
+//! C ABI over ztnx-core. See `include/ztnx.h` for the C side of this contract.
 #![cfg_attr(target_os = "horizon", no_std)]
 
 extern crate alloc;
@@ -11,15 +11,15 @@ use core::ffi::c_char;
 static VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\0");
 
 #[no_mangle]
-pub extern "C" fn wgnx_version() -> *const c_char {
+pub extern "C" fn ztnx_version() -> *const c_char {
     VERSION.as_ptr().cast()
 }
 
 /// Runs the crypto known-answer tests. Returns 0 on success, otherwise the
-/// failing test's code (see `wgnx_selftest_failure` in the header).
+/// failing test's code (see `ztnx_selftest_failure` in the header).
 #[no_mangle]
-pub extern "C" fn wgnx_selftest() -> u32 {
-    match wgnx_core::selftest::run() {
+pub extern "C" fn ztnx_selftest() -> u32 {
+    match ztnx_core::selftest::run() {
         Ok(()) => 0,
         Err(f) => f as u32,
     }
@@ -27,28 +27,28 @@ pub extern "C" fn wgnx_selftest() -> u32 {
 
 /// Seals `iterations` packets of `packet_len` bytes with ChaCha20-Poly1305.
 #[no_mangle]
-pub extern "C" fn wgnx_bench_aead(packet_len: usize, iterations: u32) -> u64 {
+pub extern "C" fn ztnx_bench_aead(packet_len: usize, iterations: u32) -> u64 {
     let mut buf = alloc::vec![0u8; packet_len];
-    wgnx_core::bench::aead_seal_loop(&mut buf, iterations)
+    ztnx_core::bench::aead_seal_loop(&mut buf, iterations)
 }
 
 /// Runs `iterations` X25519 scalar multiplications.
 #[no_mangle]
-pub extern "C" fn wgnx_bench_x25519(iterations: u32) -> u64 {
-    wgnx_core::bench::x25519_loop(iterations)
+pub extern "C" fn ztnx_bench_x25519(iterations: u32) -> u64 {
+    ztnx_core::bench::x25519_loop(iterations)
 }
 
 /// Seeds the core's CSPRNG. Must be called before any key or TLS use.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_seed_rng(seed: *const u8) {
+pub unsafe extern "C" fn ztnx_seed_rng(seed: *const u8) {
     let seed = &*(seed as *const [u8; 32]);
-    wgnx_core::rng::seed(seed);
+    ztnx_core::rng::seed(seed);
 }
 
 /// Sets wall-clock time (seconds since the Unix epoch) for certificate checks.
 #[no_mangle]
-pub extern "C" fn wgnx_set_unix_time(unix_secs: u64) {
-    wgnx_core::tls::CLOCK.set(unix_secs);
+pub extern "C" fn ztnx_set_unix_time(unix_secs: u64) {
+    ztnx_core::tls::CLOCK.set(unix_secs);
 }
 
 mod engine_ffi;
@@ -116,7 +116,7 @@ mod host_heap {
 
 /// Rust heap usage in bytes (current, peak).
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_heap_stats(current: *mut usize, peak: *mut usize) {
+pub unsafe extern "C" fn ztnx_heap_stats(current: *mut usize, peak: *mut usize) {
     use core::sync::atomic::Ordering::Relaxed;
     *current = heap_count::IN_USE.load(Relaxed);
     *peak = heap_count::PEAK.load(Relaxed);
@@ -125,7 +125,7 @@ pub unsafe extern "C" fn wgnx_heap_stats(current: *mut usize, peak: *mut usize) 
 /// Formats live Rust heap by allocation size class into `buf` (NUL-terminated,
 /// e.g. "<=64:12K/310 <=256:..."). Returns the length written.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_heap_classes(buf: *mut u8, len: usize) -> usize {
+pub unsafe extern "C" fn ztnx_heap_classes(buf: *mut u8, len: usize) -> usize {
     use core::fmt::Write;
     use core::sync::atomic::Ordering::Relaxed;
     if buf.is_null() || len == 0 {

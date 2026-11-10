@@ -6,7 +6,7 @@
 // connected/sent to a tunnel address (our own, or inside a peer's
 // AllowedIPs: IsTunnel), bound to a tunnel address, or bound to the wildcard
 // address (then it is reachable from both sides: a "dual" socket). Virtual
-// traffic goes through the wgnx engine's overlay sockets.
+// traffic goes through the ztnx engine's overlay sockets.
 //
 // The same code serves the macOS/Linux interpose shim (tests on the dev
 // machine) and the Switch bsd:u MITM; `Backend` abstracts the real stack and
@@ -24,7 +24,7 @@
 
 #include "runtime.hpp"
 
-namespace wgnx {
+namespace ztnx {
 
 // Outcome of a socket call: `ret` as the call would return, `err` an errno
 // value in the backend's numbering when ret < 0.
@@ -111,10 +111,10 @@ public:
     // with any on-link route, and special ones (loopback, link-local,
     // multicast, broadcast), which a 0.0.0.0/0 route would otherwise take.
     static bool IsTunnel(const sockaddr *addr);
-    // The engine's routes (wgnx_engine_routes), after each reload. At most
+    // The engine's routes (ztnx_engine_routes), after each reload. At most
     // MaxRoutes are used.
     static constexpr size_t MaxRoutes = 64;
-    static void SetRoutes(const WgnxPrefix *routes, size_t n);
+    static void SetRoutes(const ZtnxPrefix *routes, size_t n);
     // Our LAN: IPv4 address (host byte order; 0 = offline) and prefix length.
     static void SetLocalNet(uint32_t ip, unsigned len);
     // Test knob: send LAN addresses through the tunnel too when a route
@@ -154,7 +154,7 @@ private:
         bool connected_virtual = false;
         bool has_udp_peer = false;
         bool aliased = false;  // sent to a stand-in: show its peer as one too
-        WgnxAddr udp_peer{};
+        ZtnxAddr udp_peer{};
         uint16_t port = 0;       // locally bound port
         bool bound_any = false;  // bound to the wildcard address
         bool virtual_only = false;  // no usable real side (tunnel-bound, accepted)
@@ -164,9 +164,9 @@ private:
     };
 
     // Swaps a stand-in destination for the real address, noting it in v.
-    static void Unalias(WgnxAddr *a, VFd &v);
+    static void Unalias(ZtnxAddr *a, VFd &v);
     // Shows a peer address as its stand-in if v used one.
-    static void Realias(WgnxAddr *a, const VFd &v);
+    static void Realias(ZtnxAddr *a, const VFd &v);
 
     // Copies the state for fd (false if unknown).
     bool Get(int fd, VFd *out);
@@ -175,10 +175,10 @@ private:
     Result EngineErr(int32_t code);
     // Ensures the socket has an engine UDP socket on its port.
     bool EnsureUdp(int fd, VFd &v);
-    // Waits for virtual readiness bits (WGNX_READABLE/WRITABLE/HUP) on id.
+    // Waits for virtual readiness bits (ZTNX_READABLE/WRITABLE/HUP) on id.
     bool WaitEngine(int32_t id, uint32_t mask, int timeout_ms);
     // rt_.WaitFor in slices, stopping early if the caller is no longer alive.
-    bool WaitSliced(const std::function<bool(WgnxEngine *)> &ready, const Runtime::Clock::time_point *deadline);
+    bool WaitSliced(const std::function<bool(ZtnxEngine *)> &ready, const Runtime::Clock::time_point *deadline);
 
     Backend &real_;
     Runtime &rt_;
@@ -188,4 +188,4 @@ private:
     std::map<int, VFd> fds_;
 };
 
-}  // namespace wgnx
+}  // namespace ztnx

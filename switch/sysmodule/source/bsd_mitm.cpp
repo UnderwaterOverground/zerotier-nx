@@ -41,7 +41,7 @@ namespace ams::bsd_mitm {
 
 }
 
-#define WGNX_BSD_MITM_INTERFACE_INFO(C, H)                                                                                                                                                                            \
+#define ZTNX_BSD_MITM_INTERFACE_INFO(C, H)                                                                                                                                                                            \
     AMS_SF_METHOD_INFO(C, H,  2, Result, Socket,      (sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 domain, s32 type, s32 protocol),                                                                         (out_ret, out_errno, domain, type, protocol))                  \
     AMS_SF_METHOD_INFO(C, H,  6, Result, Poll,        (sf::Out<s32> out_ret, sf::Out<s32> out_errno, u32 nfds, s32 timeout, const sf::InAutoSelectBuffer &fds_in, const sf::OutAutoSelectBuffer &fds_out),          (out_ret, out_errno, nfds, timeout, fds_in, fds_out))          \
     AMS_SF_METHOD_INFO(C, H,  8, Result, Recv,        (sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 fd, s32 flags, const sf::OutAutoSelectBuffer &buf),                                                       (out_ret, out_errno, fd, flags, buf))                          \
@@ -64,15 +64,15 @@ namespace ams::bsd_mitm {
     AMS_SF_METHOD_INFO(C, H, 29, Result, RecvMMsg,    (sf::Out<s32> out_ret, sf::Out<s32> out_errno, ::ams::bsd_mitm::RecvMMsgArgs args, const sf::OutBuffer &buf),                                                                 (out_ret, out_errno, args, buf))                               \
     AMS_SF_METHOD_INFO(C, H, 30, Result, SendMMsg,    (sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 fd, s32 vlen, s32 flags, const sf::OutBuffer &buf),                                                       (out_ret, out_errno, fd, vlen, flags, buf))
 
-AMS_SF_DEFINE_MITM_INTERFACE(ams::bsd_mitm, IBsdMitm, WGNX_BSD_MITM_INTERFACE_INFO, 0x7767626D)
+AMS_SF_DEFINE_MITM_INTERFACE(ams::bsd_mitm, IBsdMitm, ZTNX_BSD_MITM_INTERFACE_INFO, 0x7A74626D)
 
 namespace ams::bsd_mitm {
 
     namespace {
 
-        using VResult = ::wgnx::Result;
+        using VResult = ::ztnx::Result;
 
-        constinit ::wgnx::Runtime *g_runtime = nullptr;
+        constinit ::ztnx::Runtime *g_runtime = nullptr;
         constinit Scope g_scope = Scope::Off;
         constinit bool g_installed = false;
         constinit bool g_sys_ftpd = false;
@@ -158,7 +158,7 @@ namespace ams::bsd_mitm {
                 pmdmntExit();
                 return;
             }
-            os::SetThreadNamePointer(std::addressof(g_app_check_thread), "wgnx.AppCheck");
+            os::SetThreadNamePointer(std::addressof(g_app_check_thread), "ztnx.AppCheck");
             stack_watch::Add("appcheck", std::addressof(g_app_check_thread));
             os::StartThread(std::addressof(g_app_check_thread));
             g_app_check = true;
@@ -199,7 +199,7 @@ namespace ams::bsd_mitm {
         // Real socket calls for VSock, over a session private to us (a clone
         // of the client's), so they never queue behind a call the client has
         // blocked in on one of its own sessions.
-        class HorizonBackend final : public ::wgnx::Backend {
+        class HorizonBackend final : public ::ztnx::Backend {
             public:
                 // The clone of the client's session is made on first use: every
                 // real bsd session counts against the socket service's limit
@@ -270,8 +270,8 @@ namespace ams::bsd_mitm {
                     return Call(20, in, Params());
                 }
 
-                int Errno(::wgnx::Err e) override {
-                    using ::wgnx::Err;
+                int Errno(::ztnx::Err e) override {
+                    using ::ztnx::Err;
                     switch (e) {
                         case Err::Again:       return 11;
                         case Err::InProgress:  return 115;
@@ -431,7 +431,7 @@ namespace ams::bsd_mitm {
 
         struct ClientState {
             std::unique_ptr<HorizonBackend> backend;
-            std::unique_ptr<::wgnx::VSock> vsock;
+            std::unique_ptr<::ztnx::VSock> vsock;
 
             ~ClientState() {
                 if (vsock) vsock->CloseAll();
@@ -451,7 +451,7 @@ namespace ams::bsd_mitm {
                 if (m_client_info.program_id.value == SysFtpdProgramId) g_live_sys_ftpd_sessions++;
                 auto st = std::make_unique<ClientState>();
                 st->backend = std::make_unique<HorizonBackend>(m_forward_service);
-                st->vsock = std::make_unique<::wgnx::VSock>(*st->backend, *g_runtime);
+                st->vsock = std::make_unique<::ztnx::VSock>(*st->backend, *g_runtime);
                 const u64 pid = m_client_info.process_id.value;
                 st->vsock->SetAliveCheck([pid] { return ProcessAlive(pid); });
                 st->vsock->SetEagerDualUdp(false);
@@ -476,7 +476,7 @@ namespace ams::bsd_mitm {
             }
 
         private:
-            ::wgnx::VSock *V() { return m_state ? m_state->vsock.get() : nullptr; }
+            ::ztnx::VSock *V() { return m_state ? m_state->vsock.get() : nullptr; }
             bool Known(s32 fd) { return V() && V()->IsKnown(fd); }
             bool Virtual(s32 fd) { return V() && V()->IsVirtual(fd); }
 
@@ -560,8 +560,8 @@ namespace ams::bsd_mitm {
 
             Result SendTo(sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 fd, s32 flags, const sf::InAutoSelectBuffer &buf, const sf::InAutoSelectBuffer &addr) {
                 const sockaddr *to = AddrIn(addr);
-                R_UNLESS(Virtual(fd) || (Known(fd) && ::wgnx::VSock::IsTunnel(to)), sm::mitm::ResultShouldForwardToSession());
-                if (status::IsPaused() && (to == nullptr || ::wgnx::VSock::IsTunnel(to))) R_RETURN(Reply(out_ret, out_errno, VResult{-1, WireENetUnreach}));
+                R_UNLESS(Virtual(fd) || (Known(fd) && ::ztnx::VSock::IsTunnel(to)), sm::mitm::ResultShouldForwardToSession());
+                if (status::IsPaused() && (to == nullptr || ::ztnx::VSock::IsTunnel(to))) R_RETURN(Reply(out_ret, out_errno, VResult{-1, WireENetUnreach}));
                 R_RETURN(Reply(out_ret, out_errno, V()->SendTo(fd, buf.GetPointer(), buf.GetSize(), flags, to, to ? static_cast<socklen_t>(addr.GetSize()) : 0)));
             }
 
@@ -572,7 +572,7 @@ namespace ams::bsd_mitm {
                 const VResult r = V()->Accept(fd, sa, sa ? std::addressof(len) : nullptr);
                 out_len.SetValue(r.ret >= 0 && sa ? len : 0);
                 // Dual listeners also accept plain LAN connections here.
-                if (r.ret >= 0 && sa && ::wgnx::VSock::IsTunnel(sa)) {
+                if (r.ret >= 0 && sa && ::ztnx::VSock::IsTunnel(sa)) {
                     char peer[64];
                     FormatAddr(sa, peer, sizeof peer);
                     Log("bsd mitm: pid %lu accepted tunnel connection from %s on fd %d (new fd %d; %zu sockets tracked)", m_client_info.process_id.value, peer, fd,
@@ -589,7 +589,7 @@ namespace ams::bsd_mitm {
 
             Result Connect(sf::Out<s32> out_ret, sf::Out<s32> out_errno, s32 fd, const sf::InAutoSelectBuffer &addr) {
                 const sockaddr *sa = AddrIn(addr);
-                const bool tunnel = ::wgnx::VSock::IsTunnel(sa);
+                const bool tunnel = ::ztnx::VSock::IsTunnel(sa);
                 R_UNLESS(Known(fd) && sa != nullptr && (tunnel || Virtual(fd)), sm::mitm::ResultShouldForwardToSession());
                 if (tunnel && status::IsPaused()) R_RETURN(Reply(out_ret, out_errno, VResult{-1, WireENetUnreach}));
                 const VResult r = V()->Connect(fd, sa, static_cast<socklen_t>(addr.GetSize()));
@@ -677,8 +677,8 @@ namespace ams::bsd_mitm {
                     if (sa->sa_family == AF_INET6 && m.name_len >= sizeof(sockaddr_in6)) return sa;
                     return nullptr;
                 };
-                R_UNLESS(Virtual(fd) || ::wgnx::VSock::IsTunnel(dest(msgs[0])), sm::mitm::ResultShouldForwardToSession());
-                if (status::IsPaused() && (dest(msgs[0]) == nullptr || ::wgnx::VSock::IsTunnel(dest(msgs[0])))) R_RETURN(Reply(out_ret, out_errno, VResult{-1, WireENetUnreach}));
+                R_UNLESS(Virtual(fd) || ::ztnx::VSock::IsTunnel(dest(msgs[0])), sm::mitm::ResultShouldForwardToSession());
+                if (status::IsPaused() && (dest(msgs[0]) == nullptr || ::ztnx::VSock::IsTunnel(dest(msgs[0])))) R_RETURN(Reply(out_ret, out_errno, VResult{-1, WireENetUnreach}));
 
                 s32 sent = 0;
                 VResult last = VResult::Ok(0);
@@ -883,7 +883,7 @@ namespace ams::bsd_mitm {
                     }
                     return i > 0;
                 }
-                os::SetThreadNamePointer(threads + i, "wgnx.BsdSMitm");
+                os::SetThreadNamePointer(threads + i, "ztnx.BsdSMitm");
                 stack_watch::Add("mitm:s", threads + i);
                 os::StartThread(threads + i);
             }
@@ -956,7 +956,7 @@ namespace ams::bsd_mitm {
 
     }
 
-    bool Start(::wgnx::Runtime &rt, Scope scope, bool sys_ftpd, const char *titles) {
+    bool Start(::ztnx::Runtime &rt, Scope scope, bool sys_ftpd, const char *titles) {
         if (scope == Scope::Off) {
             Log("bsd mitm: off (mitm=off in config.ini)%s", titles[0] ? "; mitm_titles ignored" : "");
             return false;
@@ -995,7 +995,7 @@ namespace ams::bsd_mitm {
                 return i > 0;
             }
             os::SetThreadCoreMask(g_threads + i, PreferredCore, EngineCores);
-            os::SetThreadNamePointer(g_threads + i, "wgnx.BsdMitm");
+            os::SetThreadNamePointer(g_threads + i, "ztnx.BsdMitm");
             stack_watch::Add("mitm", g_threads + i);
             os::StartThread(g_threads + i);
         }

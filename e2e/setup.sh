@@ -9,12 +9,12 @@
 #   bg       10.7.0.4  PersistentKeepalive 3
 #   psk      10.7.0.5  with a PresharedKey (badpsk: the same with a wrong one)
 #   roam     10.7.0.6
-#   noep     10.7.0.7  no Endpoint: the server contacts it (172.31.0.30:41649)
+#   noep     10.7.0.7  no Endpoint: the server contacts it (172.31.2.30:41649)
 #   dns      10.7.0.8  Endpoint by name (wg-server-later, see run-tests.sh)
 # AmneziaWG clients (peers of the awg server, 10.7.1.1):
 #   awgclient 10.7.1.2  (awg-plain: the same keys without the AmneziaWG keys)
 #   awgswitch 10.7.1.3  for a console on the LAN, via the published port
-#                       (WGNX_LAN_IP overrides the host address it uses)
+#                       (ZTNX_LAN_IP overrides the host address it uses)
 # AmneziaWG 3 clients (peers of the header-protected awg1, 10.7.2.1):
 #   awghp 10.7.2.2  (awghp-nokey: the same without HeaderProtectionKey)
 #   awghpswitch 10.7.2.3  for a console, via the published port 51822
@@ -26,22 +26,22 @@ docker compose --profile peer build -q peer awg-peer
 if [[ ! -s state/keys.txt ]]; then
   # Plain docker run: the compose service's mounts would create the .conf
   # paths as directories before they exist.
-  docker run --rm --entrypoint sh wgnx-e2e-peer -c '
+  docker run --rm --entrypoint sh ztnx-e2e-peer -c '
     for n in server peer2 client preload bg psk roam noep dns; do
       k=$(wg genkey); echo "$n $k $(echo "$k" | wg pubkey) $(wg genpsk)"
     done' > state/keys.txt
 fi
 for n in awg awgclient awgswitch awghpserver awghp awghpswitch; do  # added later: an older state/ may lack them
-  grep -q "^$n " state/keys.txt || docker run --rm --entrypoint sh wgnx-e2e-peer -c \
+  grep -q "^$n " state/keys.txt || docker run --rm --entrypoint sh ztnx-e2e-peer -c \
     "k=\$(wg genkey); echo \"$n \$k \$(echo \"\$k\" | wg pubkey) \$(wg genpsk)\"" >> state/keys.txt
 done
 # The AmneziaWG 3 header protection key (any 32 bytes; `awg genkey` makes one).
 grep -q "^hpkey " state/keys.txt || echo "hpkey $(head -c 32 /dev/urandom | base64) - -" >> state/keys.txt
 key() { awk -v n="$1" -v f="$2" '$1==n {print $f}' state/keys.txt; }  # f: 2 private, 3 public, 4 psk
-SERVER=172.31.0.20
-PEER2=172.31.0.21
-AWG_SERVER=172.31.0.22
-LAN_IP=${WGNX_LAN_IP:-$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')}
+SERVER=172.31.2.20
+PEER2=172.31.2.21
+AWG_SERVER=172.31.2.22
+LAN_IP=${ZTNX_LAN_IP:-$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')}
 # The obfuscation both sides of the AmneziaWG tunnel agree on: junk before
 # handshakes, padded handshake messages, disguised headers (H4 a range).
 AWG="Jc = 4
@@ -122,7 +122,7 @@ client awghpswitch 10.7.2.3/24 "$AWG3" "" "$A3" "Endpoint = ${LAN_IP:-192.0.2.1}
   server_peer bg 10.7.0.4/32
   server_peer psk 10.7.0.5/32 "PresharedKey = $(key psk 4)"
   server_peer roam 10.7.0.6/32
-  server_peer noep 10.7.0.7/32 "Endpoint = 172.31.0.30:41649" "PersistentKeepalive = 5"
+  server_peer noep 10.7.0.7/32 "Endpoint = 172.31.2.30:41649" "PersistentKeepalive = 5"
   server_peer dns 10.7.0.8/32
 } > state/wg0.conf
 {

@@ -1,6 +1,6 @@
-// See wgnx_app.h.
-#include "wgnx_app.h"
-#include "wgnx_dns.h"
+// See ztnx_app.h.
+#include "ztnx_app.h"
+#include "ztnx_dns.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -11,14 +11,14 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#ifdef WGNX_NO_STDIO
+#ifdef ZTNX_NO_STDIO
 // Builds without newlib's printf (the sysmodule) supply this instead.
-int wgnx_snprintf(char *dst, size_t size, const char *fmt, ...);
-#define snprintf wgnx_snprintf
+int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...);
+#define snprintf ztnx_snprintf
 #endif
 
-#ifndef WGNX_BUILD_UNIX
-#error "define WGNX_BUILD_UNIX (build time, Unix seconds)"
+#ifndef ZTNX_BUILD_UNIX
+#error "define ZTNX_BUILD_UNIX (build time, Unix seconds)"
 #endif
 
 // Hand-rolled parsing throughout: sscanf would pull newlib's whole scanf
@@ -39,7 +39,7 @@ static const char *expect(const char *s, char c) {
     return s && *s == c ? s + 1 : NULL;
 }
 
-int wgnx_parse_ipv4(const char *s, uint16_t port, WgnxAddr *out) {
+int ztnx_parse_ipv4(const char *s, uint16_t port, ZtnxAddr *out) {
     unsigned a = 0, b = 0, c = 0, d = 0;
     s = parse_uint(s, 3, &a);
     s = s ? parse_uint(expect(s, '.') ? s + 1 : "", 3, &b) : NULL;
@@ -56,38 +56,38 @@ int wgnx_parse_ipv4(const char *s, uint16_t port, WgnxAddr *out) {
     return 0;
 }
 
-static const char kPayload[] = "wireguard-nx echo test";
+static const char kPayload[] = "zerotier-nx echo test";
 #define ECHO_TIMEOUT_NS (30ull * 1000000000ull)
 
-void wgnx_echo_init(WgnxEcho *t, const WgnxAddr *target) {
+void ztnx_echo_init(ZtnxEcho *t, const ZtnxAddr *target) {
     memset(t, 0, sizeof *t);
     t->target = *target;
     t->tcp = t->udp = -1;
 }
 
-int wgnx_echo_step(WgnxEcho *t, WgnxEngine *e, uint64_t now_ns) {
+int ztnx_echo_step(ZtnxEcho *t, ZtnxEngine *e, uint64_t now_ns) {
     if (t->result) return t->result;
     if (!t->started_ns) {
         t->started_ns = now_ns;
-        t->tcp = wgnx_net_tcp_connect(e, &t->target);
-        t->udp = wgnx_net_udp_bind(e, 0);
+        t->tcp = ztnx_net_tcp_connect(e, &t->target);
+        t->udp = ztnx_net_udp_bind(e, 0);
     }
     const size_t plen = sizeof kPayload - 1;
     if (t->tcp > 0) {
-        if (!t->tcp_sent && (wgnx_net_readiness(e, t->tcp) & WGNX_WRITABLE))
-            t->tcp_sent = wgnx_net_send(e, t->tcp, (const uint8_t *)kPayload, plen) == (int32_t)plen;
-        int32_t n = wgnx_net_recv(e, t->tcp, (uint8_t *)t->tcp_got + t->tcp_got_len,
+        if (!t->tcp_sent && (ztnx_net_readiness(e, t->tcp) & ZTNX_WRITABLE))
+            t->tcp_sent = ztnx_net_send(e, t->tcp, (const uint8_t *)kPayload, plen) == (int32_t)plen;
+        int32_t n = ztnx_net_recv(e, t->tcp, (uint8_t *)t->tcp_got + t->tcp_got_len,
                                   sizeof t->tcp_got - 1 - t->tcp_got_len);
         if (n > 0) t->tcp_got_len += (size_t)n;
     }
     if (t->udp > 0 && !t->udp_ok) {
         if (now_ns - t->last_udp_ns > 1000000000ull) {
-            wgnx_net_udp_sendto(e, t->udp, (const uint8_t *)kPayload, plen, &t->target);
+            ztnx_net_udp_sendto(e, t->udp, (const uint8_t *)kPayload, plen, &t->target);
             t->last_udp_ns = now_ns;
         }
         uint8_t buf[64];
-        WgnxAddr from;
-        int32_t n = wgnx_net_udp_recvfrom(e, t->udp, buf, sizeof buf, &from);
+        ZtnxAddr from;
+        int32_t n = ztnx_net_udp_recvfrom(e, t->udp, buf, sizeof buf, &from);
         t->udp_ok = n == (int32_t)plen && !memcmp(buf, kPayload, plen);
     }
     int tcp_ok = t->tcp_got_len == plen && !memcmp(t->tcp_got, kPayload, plen);
@@ -97,8 +97,8 @@ int wgnx_echo_step(WgnxEcho *t, WgnxEngine *e, uint64_t now_ns) {
         t->result = -1;
     }
     if (t->result) {
-        if (t->tcp > 0) wgnx_net_close(e, t->tcp);
-        if (t->udp > 0) wgnx_net_close(e, t->udp);
+        if (t->tcp > 0) ztnx_net_close(e, t->tcp);
+        if (t->udp > 0) ztnx_net_close(e, t->udp);
     }
     return t->result;
 }
@@ -113,7 +113,7 @@ static int64_t days_from_civil(int64_t y, unsigned m, unsigned d) {
     return era * 146097 + (int64_t)doe - 719468;
 }
 
-uint64_t wgnx_parse_http_date(const char *s) {
+uint64_t ztnx_parse_http_date(const char *s) {
     static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
     // "Sun, 04 Oct 2026 01:23:45 GMT"
     char mon[4] = {0};
@@ -137,13 +137,13 @@ uint64_t wgnx_parse_http_date(const char *s) {
 }
 
 static bool plausible(uint64_t t) {
-    return t >= (uint64_t)WGNX_BUILD_UNIX && t <= (uint64_t)WGNX_BUILD_UNIX + WGNX_CLOCK_MAX_AHEAD;
+    return t >= (uint64_t)ZTNX_BUILD_UNIX && t <= (uint64_t)ZTNX_BUILD_UNIX + ZTNX_CLOCK_MAX_AHEAD;
 }
 
 // HEAD / over plain HTTP; returns the Date header's time, or 0.
 static uint64_t http_date(const char *host) {
     uint32_t ip;
-    if (wgnx_resolve_ipv4(host, &ip) != 0) return 0;
+    if (ztnx_resolve_ipv4(host, &ip) != 0) return 0;
     struct sockaddr_in sin;
     memset(&sin, 0, sizeof sin);
     sin.sin_family = AF_INET;
@@ -167,7 +167,7 @@ static uint64_t http_date(const char *host) {
             resp[got] = 0;
             for (char *line = resp; line && *line; line = strstr(line, "\r\n") ? strstr(line, "\r\n") + 2 : NULL) {
                 if (!strncasecmp(line, "Date:", 5)) {
-                    t = wgnx_parse_http_date(line + 5 + strspn(line + 5, " "));
+                    t = ztnx_parse_http_date(line + 5 + strspn(line + 5, " "));
                     break;
                 }
             }
@@ -177,7 +177,7 @@ static uint64_t http_date(const char *host) {
     return t;
 }
 
-uint64_t wgnx_sane_unix_time(uint64_t system_unix, const char *host, bool *corrected) {
+uint64_t ztnx_sane_unix_time(uint64_t system_unix, const char *host, bool *corrected) {
     *corrected = false;
     if (plausible(system_unix)) return system_unix;
     uint64_t net = http_date(host);

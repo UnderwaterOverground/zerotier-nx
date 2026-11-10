@@ -1,10 +1,10 @@
-//! Host driver for wgnx-core: runs a .conf against real peers on the
+//! Host driver for ztnx-core: runs a .conf against real peers on the
 //! development machine, plus diagnostics.
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use wgnx_core::tls::{self, TlsClient};
+use ztnx_core::tls::{self, TlsClient};
 
 /// Counts heap usage so the Switch builds' heap budget can be sized from
 /// real runs (printed at exit).
@@ -39,7 +39,7 @@ const USAGE: &str = "selftest | genkey | tls-probe [host[:port]] [path] | check 
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    wgnx_core::rng::seed_from_os();
+    ztnx_core::rng::seed_from_os();
     tls::CLOCK.set(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs());
 
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -65,16 +65,16 @@ fn main() {
 /// Prints a new private key and its public key, base64 as .conf files use.
 fn genkey() -> Result<(), String> {
     use base64::Engine as _;
-    let private = wgnx_core::rng::bytes32().map_err(|_| "rng not seeded")?;
+    let private = ztnx_core::rng::bytes32().map_err(|_| "rng not seeded")?;
     let b64 = base64::engine::general_purpose::STANDARD;
     println!("PrivateKey = {}", b64.encode(private));
-    println!("PublicKey = {}", b64.encode(wgnx_core::crypto::x25519_public(&private)));
+    println!("PublicKey = {}", b64.encode(ztnx_core::crypto::x25519_public(&private)));
     Ok(())
 }
 
 fn selftest() -> Result<(), String> {
-    wgnx_core::selftest::run().map_err(|f| format!("selftest failed: {f:?}"))?;
-    println!("wgnx-host {}: selftest ok", wgnx_core::VERSION);
+    ztnx_core::selftest::run().map_err(|f| format!("selftest failed: {f:?}"))?;
+    println!("ztnx-host {}: selftest ok", ztnx_core::VERSION);
     Ok(())
 }
 
@@ -120,10 +120,10 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
-fn load_conf(args: &[String]) -> Result<wgnx_core::config::WgConfig, String> {
+fn load_conf(args: &[String]) -> Result<ztnx_core::config::WgConfig, String> {
     let path = flag(args, "--conf").ok_or("--conf FILE is required")?;
     let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    wgnx_core::config::parse(&text).map_err(|e| format!("{path}: {e}"))
+    ztnx_core::config::parse(&text).map_err(|e| format!("{path}: {e}"))
 }
 
 /// Parses a .conf and prints what the engine makes of it.
@@ -135,12 +135,12 @@ fn check(args: &[String]) -> Result<(), String> {
         i.name.as_deref().map(|n| format!(" {n}")).unwrap_or_default(),
         i.addresses.iter().map(|p| format!("{}/{}", p.addr, p.len)).collect::<Vec<_>>().join(" "),
         i.listen_port.map_or("any".to_string(), |p| p.to_string()),
-        i.mtu.unwrap_or(wgnx_core::engine::DEFAULT_MTU as u16)
+        i.mtu.unwrap_or(ztnx_core::engine::DEFAULT_MTU as u16)
     );
     for p in &cfg.peers {
         let endpoint = match &p.endpoint {
-            Some((wgnx_core::config::EndpointHost::Ip(ip), port)) => format!("{ip}:{port}"),
-            Some((wgnx_core::config::EndpointHost::Name(n), port)) => format!("{n}:{port} (name)"),
+            Some((ztnx_core::config::EndpointHost::Ip(ip), port)) => format!("{ip}:{port}"),
+            Some((ztnx_core::config::EndpointHost::Name(n), port)) => format!("{n}:{port} (name)"),
             None => "none".into(),
         };
         println!(
@@ -167,7 +167,7 @@ fn up(args: &[String]) -> Result<(), String> {
         cfg,
         udp_port,
         |ev| {
-            if matches!(ev, wgnx_core::engine::Event::Handshake { .. }) {
+            if matches!(ev, ztnx_core::engine::Event::Handshake { .. }) {
                 handshaken.set(true);
             }
             log::info!("{ev:?}");

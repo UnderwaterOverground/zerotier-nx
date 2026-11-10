@@ -10,7 +10,7 @@
 #pragma once
 
 extern "C" {
-#include "wgnx.h"
+#include "ztnx.h"
 }
 
 namespace ams::hosts {
@@ -20,7 +20,7 @@ namespace ams::hosts {
     // aliases, private peer addresses are written as stand-ins the socket
     // layer translates (VSock::SetAliases), so Moonlight sizes its packets
     // to fit the tunnel.
-    bool Collect(WgnxEngine *engine, bool aliases);
+    bool Collect(ZtnxEngine *engine, bool aliases);
 
     // Rewrites the managed block with what Collect() built, without the
     // runtime lock: it reads and rewrites a file on the SD card, which can

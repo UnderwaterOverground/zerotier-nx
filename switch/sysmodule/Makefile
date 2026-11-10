@@ -1,26 +1,26 @@
 #---------------------------------------------------------------------------------
-# wireguard-nx sysmodule (Atmosphère libstratosphere 1.12.0).
-# Built by the top-level `make sysmodule` inside the wgnx-build Docker image.
+# zerotier-nx sysmodule (Atmosphère libstratosphere 1.12.0).
+# Built by the top-level `make sysmodule` inside the ztnx-build Docker image.
 #---------------------------------------------------------------------------------
 SYSMODULE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 ATMOSPHERE_LIBS := $(SYSMODULE_DIR)/../../third_party/Atmosphere/libraries
 include $(ATMOSPHERE_LIBS)/config/templates/stratosphere.mk
 
-TARGET		:=	wireguard-nx
+TARGET		:=	zerotier-nx
 BUILD		:=	build
 SOURCES		:=	source ../../native/driver ../../native/runtime ../../native/vsock
 DATA		:=	data
-INCLUDES	:=	source ../../native/driver ../../native/runtime ../../native/vsock ../../native/ctl ../../crates/wgnx-ffi/include
-TITLE_ID	:=	4200000000005747
+INCLUDES	:=	source ../../native/driver ../../native/runtime ../../native/vsock ../../native/ctl ../../crates/ztnx-ffi/include
+TITLE_ID	:=	4200000000005A54
 
-WGNX_BUILD_UNIX ?= $(shell date +%s)
+ZTNX_BUILD_UNIX ?= $(shell date +%s)
 RUST_LIB_DIR	?=	$(abspath $(SYSMODULE_DIR)/../../target/switch/aarch64-nintendo-switch-freestanding/release)
 # No newlib stdio/printf: state files go through ams::fs, and the shared C
 # code's snprintf is routed to libstratosphere's formatter (see
-# wgnx_snprintf in main.cpp and wgnx_driver.h).
-CFLAGS		+=	-DWGNX_BUILD_UNIX=$(WGNX_BUILD_UNIX) -Wno-error=sign-compare -DWGNX_NO_STDIO
-CXXFLAGS	+=	-DWGNX_BUILD_UNIX=$(WGNX_BUILD_UNIX) -DWGNX_NO_STDIO
-LIBS		:=	-lwgnx_ffi $(LIBS)
+# ztnx_snprintf in main.cpp and ztnx_driver.h).
+CFLAGS		+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -Wno-error=sign-compare -DZTNX_NO_STDIO
+CXXFLAGS	+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -DZTNX_NO_STDIO
+LIBS		:=	-lztnx_ffi $(LIBS)
 
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 
@@ -69,7 +69,7 @@ DEPENDS	:=	$(OFILES:.o=.d)
 all	:	$(OUTPUT).nsp
 $(OUTPUT).nsp	:	$(OUTPUT).nso $(OUTPUT).npdm
 $(OUTPUT).nso	:	$(OUTPUT).elf
-$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libwgnx_ffi.a
+$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libztnx_ffi.a
 $(OFILES)	:	$(ATMOSPHERE_LIBRARIES_DIR)/libstratosphere/$(ATMOSPHERE_LIBRARY_DIR)/libstratosphere.a
 
 %.npdm	:	$(APP_JSON)

@@ -1,4 +1,4 @@
-// wireguard-nx speedtest: TCP and UDP throughput to tools/speedtest-server.py
+// zerotier-nx speedtest: TCP and UDP throughput to tools/speedtest-server.py
 // and the cost of single socket calls, once per server address (its LAN
 // address, then its tunnel address), plus SD card write speed and the
 // engine's crypto benchmark. Output goes to nxlink.
@@ -15,16 +15,16 @@
 
 #include <switch.h>
 
-#include "wgnx.h"
+#include "ztnx.h"
 
 #define PORT 5300
 #define SECS 8
 #define DGRAM 1200
 
-void wgnx_platform_random(uint8_t *buf, size_t len) { randomGet(buf, len); }
+void ztnx_platform_random(uint8_t *buf, size_t len) { randomGet(buf, len); }
 
-_Noreturn void wgnx_platform_panic(const uint8_t *msg, size_t len) {
-    printf("PANIC in wgnx core: %.*s\n", (int)len, (const char *)msg);
+_Noreturn void ztnx_platform_panic(const uint8_t *msg, size_t len) {
+    printf("PANIC in ztnx core: %.*s\n", (int)len, (const char *)msg);
     abort();
 }
 
@@ -188,13 +188,13 @@ static void bench(void) {
     for (int i = 0; i < 2; i++) {
         const u32 packets = 20000;
         double t = now_s();
-        wgnx_bench_aead(sizes[i], packets);
+        ztnx_bench_aead(sizes[i], packets);
         t = now_s() - t;
         printf("  chacha20poly1305, %zu-byte packets: %.1f Mbit/s\n", sizes[i],
                sizes[i] * packets * 8.0 / t / 1e6);
     }
     double t = now_s();
-    wgnx_bench_x25519(200);
+    ztnx_bench_x25519(200);
     printf("  x25519: %.0f ops/s\n", 200 / (now_s() - t));
 }
 
@@ -293,7 +293,7 @@ int main(int argc, char **argv) {
     const char *tests = "bsctu";
     for (int i = 1; i < argc; i++)
         if (argv[i][0] == '+') tests = argv[i] + 1;
-    printf("wireguard-nx speedtest, %d s per test\n", SECS);
+    printf("zerotier-nx speedtest, %d s per test\n", SECS);
     if (strchr(tests, 'b')) {
         printf("\ncrypto (this core):\n");
         bench();

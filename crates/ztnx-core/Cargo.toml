@@ -1,5 +1,5 @@
 [package]
-name = "wgnx-core"
+name = "ztnx-core"
 description = "Sans-IO WireGuard engine core (no_std + alloc)"
 edition.workspace = true
 license.workspace = true

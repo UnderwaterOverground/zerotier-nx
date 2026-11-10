@@ -7,9 +7,9 @@
 
 #include "runtime.hpp"
 
-extern "C" void wgnx_platform_random(uint8_t *buf, size_t len);
+extern "C" void ztnx_platform_random(uint8_t *buf, size_t len);
 
-using wgnx::Runtime;
+using ztnx::Runtime;
 
 static bool WaitSuspended(Runtime &rt, bool want) {
     for (int i = 0; i < 30; i++) {
@@ -21,23 +21,23 @@ static bool WaitSuspended(Runtime &rt, bool want) {
 
 int main() {
     uint8_t seed[32];
-    wgnx_platform_random(seed, 32);
-    wgnx_seed_rng(seed);
+    ztnx_platform_random(seed, 32);
+    ztnx_seed_rng(seed);
     // A peer nobody answers at: the engine just keeps trying to handshake.
     static const char kConf[] =
         "[Interface]\nPrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=\nAddress = 10.7.0.2/32\n"
         "[Peer]\nPublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=\nAllowedIPs = 10.7.0.1/32\n"
         "Endpoint = 127.0.0.1:9\nPersistentKeepalive = 1\n";
-    WgnxEngine *engine = wgnx_engine_new(wgnx_driver_now_ns(), static_cast<uint64_t>(time(nullptr)));
-    WgnxConfig cfg{kConf, sizeof kConf - 1};
+    ZtnxEngine *engine = ztnx_engine_new(ztnx_driver_now_ns(), static_cast<uint64_t>(time(nullptr)));
+    ZtnxConfig cfg{kConf, sizeof kConf - 1};
     char err[128];
-    assert(wgnx_engine_reload(engine, &cfg, wgnx_driver_now_ns(), err, sizeof err));
-    WgnxDriver *driver = wgnx_driver_new(engine, nullptr, nullptr);
-    assert(wgnx_driver_open_udp(driver, 0) == 0);
+    assert(ztnx_engine_reload(engine, &cfg, ztnx_driver_now_ns(), err, sizeof err));
+    ZtnxDriver *driver = ztnx_driver_new(engine, nullptr, nullptr);
+    assert(ztnx_driver_open_udp(driver, 0) == 0);
     std::string error;
     auto rt = Runtime::Adopt(engine, driver, &error);
     assert(rt);
-    std::thread loop([&] { rt->Run([](WgnxDriver *) {}); });
+    std::thread loop([&] { rt->Run([](ZtnxDriver *) {}); });
 
     rt->RequestSuspended(Runtime::kPaused, true);
     assert(WaitSuspended(*rt, true));
@@ -61,13 +61,13 @@ int main() {
     assert(rt->IsSuspended());
     rt->Resume(Runtime::kSleep);
     assert(WaitSuspended(*rt, false));
-    assert(wgnx_driver_udp_port(driver) != 0);  // reopened on resume
+    assert(ztnx_driver_udp_port(driver) != 0);  // reopened on resume
 
     rt->Stop();
     loop.join();
     rt.reset();
-    wgnx_driver_free(driver);
-    wgnx_engine_free(engine);
+    ztnx_driver_free(driver);
+    ztnx_engine_free(engine);
     std::puts("runtime tests passed");
     return 0;
 }

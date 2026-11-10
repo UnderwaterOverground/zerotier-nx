@@ -1,5 +1,5 @@
 {
-    "name": "wireguard-nx",
-    "tid": "0x4200000000005747",
+    "name": "zerotier-nx",
+    "tid": "0x4200000000005A54",
     "requires_reboot": true
 }

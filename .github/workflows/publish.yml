@@ -39,7 +39,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-zip
-          path: dist/wireguard-nx-*.zip
+          path: dist/zerotier-nx-*.zip
 
       # The release action applies `draft: true` to an existing release too,
       # which would unpublish it (e.g. a re-run after publishing): skip then.
@@ -60,4 +60,4 @@ jobs:
         with:
           draft: true
           generate_release_notes: true
-          files: dist/wireguard-nx-*.zip
+          files: dist/zerotier-nx-*.zip

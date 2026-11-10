@@ -6,7 +6,7 @@
 
 #include "vsock.hpp"
 
-using wgnx::VSock;
+using ztnx::VSock;
 
 static bool Routed(const char *ip) {
     sockaddr_in a{};
@@ -15,8 +15,8 @@ static bool Routed(const char *ip) {
     return VSock::IsTunnel(reinterpret_cast<sockaddr *>(&a));
 }
 
-static WgnxPrefix V4(const char *ip, uint8_t len) {
-    WgnxPrefix p{};
+static ZtnxPrefix V4(const char *ip, uint8_t len) {
+    ZtnxPrefix p{};
     p.family = 4;
     p.len = len;
     inet_pton(AF_INET, ip, p.ip);
@@ -27,7 +27,7 @@ int main() {
     // Nothing configured: nothing goes through the tunnel.
     assert(!Routed("10.7.0.1") && !Routed("192.168.1.10"));
     // Our own /32, a peer's /32 and its subnets.
-    const WgnxPrefix routes[] = {V4("10.7.0.2", 32), V4("10.7.0.1", 32), V4("10.123.0.0", 24), V4("192.168.1.0", 24)};
+    const ZtnxPrefix routes[] = {V4("10.7.0.2", 32), V4("10.7.0.1", 32), V4("10.123.0.0", 24), V4("192.168.1.0", 24)};
     VSock::SetRoutes(routes, 4);
     assert(Routed("10.7.0.2") && Routed("10.7.0.1") && Routed("10.123.0.9") && Routed("192.168.1.10"));
     assert(!Routed("10.7.0.9") && !Routed("10.124.0.1") && !Routed("8.8.8.8"));
@@ -42,7 +42,7 @@ int main() {
     VSock::SetLocalNet(0, 32);
     assert(Routed("192.168.1.10") && Routed("10.123.0.9"));
     // A default route takes everything but the LAN and special addresses.
-    const WgnxPrefix all[] = {V4("10.7.0.2", 32), V4("0.0.0.0", 0)};
+    const ZtnxPrefix all[] = {V4("10.7.0.2", 32), V4("0.0.0.0", 0)};
     VSock::SetRoutes(all, 2);
     VSock::SetLocalNet(ntohl(inet_addr("192.168.1.50")), 24);
     assert(Routed("8.8.8.8") && Routed("10.7.0.1") && !Routed("192.168.1.10"));
@@ -64,7 +64,7 @@ int main() {
     assert(!VSock::AliasFor(ip("10.1.0.0")) && !VSock::AliasFor(ip("10.1.255.255")));
     // A stand-in goes through the tunnel even when its peer is on our LAN,
     // and translates both ways.
-    const WgnxPrefix peer[] = {V4("10.7.0.2", 32), V4("192.168.1.10", 32)};
+    const ZtnxPrefix peer[] = {V4("10.7.0.2", 32), V4("192.168.1.10", 32)};
     VSock::SetRoutes(peer, 2);
     const VSock::Alias aliases[] = {{ip("100.127.1.10"), ip("192.168.1.10")}};
     VSock::SetAliases(aliases, 1);

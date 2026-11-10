@@ -10,7 +10,7 @@ set -eu
 cd "$(dirname "$0")/.."
 target=$((0x280000))
 min_heap=$((768 * 1024))  # engine (~300 KB) + overlay_budget_kb up to 384 + slack
-elf=switch/sysmodule/wireguard-nx.elf
+elf=switch/sysmodule/zerotier-nx.elf
 header=switch/sysmodule/source/heap_size.h
 readelf=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-readelf
 
@@ -19,7 +19,7 @@ image=0
 for memsz in $("$readelf" -lW "$elf" | awk '$1 == "LOAD" { print $6 }'); do
   image=$((image + (memsz + 0xfff) / 0x1000 * 0x1000))
 done
-heap=$(($(sed -n 's/^#define WGNX_HEAP_SIZE \(0x[0-9A-Fa-f]*\).*/\1/p' "$header")))
+heap=$(($(sed -n 's/^#define ZTNX_HEAP_SIZE \(0x[0-9A-Fa-f]*\).*/\1/p' "$header")))
 total=$((image + stack))
 if [ "$total" -eq "$target" ]; then
   echo "footprint: $((total / 1024)) KB (heap $((heap / 1024)) KB)"
@@ -34,7 +34,7 @@ cat > "$header" <<HDR
 // The sysmodule's heap size, written by tools/footprint.sh (make sysmodule):
 // it fills the sysmodule's memory up to exactly 2.5 MB (2560 KB) with the
 // code as built. Commit it with the code change that moved it.
-#define WGNX_HEAP_SIZE $(printf '0x%X' "$new")
+#define ZTNX_HEAP_SIZE $(printf '0x%X' "$new")
 HDR
 echo "footprint: was $((total / 1024)) KB; heap $((heap / 1024)) -> $((new / 1024)) KB, rebuilding"
 exit 3

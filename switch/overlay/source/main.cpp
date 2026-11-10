@@ -1,5 +1,5 @@
-// WireGuard overlay: status, peers, pause, config and stop/start for the
-// wireguard-nx sysmodule, through its wgnx:ctl service (native/ctl/wgnx_ctl.h).
+// ZeroTier overlay: status, peers, pause, config and stop/start for the
+// zerotier-nx sysmodule, through its ztnx:ctl service (native/ctl/ztnx_ctl.h).
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
 
@@ -10,15 +10,15 @@
 #include <cstdio>
 #include <cstring>
 
-#include "wgnx_ctl.h"
+#include "ztnx_ctl.h"
 
 namespace {
 
-    // ---- wgnx:ctl client -------------------------------------------------
+    // ---- ztnx:ctl client -------------------------------------------------
 
     // Atmosphère's sm makes a request for a service nobody has registered
     // wait until someone does (for boot ordering), so the overlay would hang
-    // when wireguard-nx isn't running: ask whether it exists first.
+    // when zerotier-nx isn't running: ask whether it exists first.
     bool ServiceExists(const char *name) {
         u8 has = 0;
         const SmServiceName sn = smEncodeName(name);
@@ -27,7 +27,7 @@ namespace {
         return R_SUCCEEDED(rc) && (has & 1);
     }
 
-    // Every wgnx:ctl request runs on this thread, so a sysmodule that doesn't
+    // Every ztnx:ctl request runs on this thread, so a sysmodule that doesn't
     // answer (busy, or stuck) can't freeze the overlay: the panel keeps its
     // last answer and says the sysmodule isn't responding. The UI thread
     // only reads the snapshot and posts requests.
@@ -37,10 +37,10 @@ namespace {
             bool valid = false;  // the thread has looked at least once
             bool have = false;   // a session is open
             bool status_ok = false;
-            WgnxCtlStatus status = {};
+            ZtnxCtlStatus status = {};
             char last_error[192] = {};
-            char conf_name[WGNX_CTL_CONF_NAME_MAX] = {};
-            WgnxPeerInfo peers[WGNX_CTL_MAX_PEERS] = {};
+            char conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
+            ZtnxPeerInfo peers[ZTNX_CTL_MAX_PEERS] = {};
             u32 peer_count = 0;  // configured, which can be more than fit in peers
         };
 
@@ -59,8 +59,8 @@ namespace {
         u32 g_stop_code = 0;
         std::atomic<bool> g_set_conf{false};       // a SetConf to send (g_conf_to_set, under g_mutex)
         std::atomic<bool> g_set_conf_done{false};
-        char g_conf_to_set[WGNX_CTL_CONF_NAME_MAX] = {};
-        char g_conf_set[WGNX_CTL_CONF_NAME_MAX] = {};  // the name the last SetConf was for
+        char g_conf_to_set[ZTNX_CTL_CONF_NAME_MAX] = {};
+        char g_conf_set[ZTNX_CTL_CONF_NAME_MAX] = {};  // the name the last SetConf was for
         Result g_set_conf_rc = 0;
         u32 g_set_conf_code = 0;
         std::atomic<u64> g_call_since{0};  // system tick the current request began, 0: none
@@ -128,7 +128,7 @@ namespace {
                     // around each use (libnx counts them, across threads too).
                     g_open = Call([] {
                         bool ok = false;
-                        tsl::hlp::doWithSmSession([&] { ok = ServiceExists(WGNX_CTL_SERVICE) && R_SUCCEEDED(smGetService(&g_session, WGNX_CTL_SERVICE)); });
+                        tsl::hlp::doWithSmSession([&] { ok = ServiceExists(ZTNX_CTL_SERVICE) && R_SUCCEEDED(smGetService(&g_session, ZTNX_CTL_SERVICE)); });
                         return ok;
                     });
                 }
@@ -147,7 +147,7 @@ namespace {
                     Call([&] { return serviceDispatchIn(&g_session, 1, v); });
                 }
                 if (g_open && g_set_conf.exchange(false)) {
-                    static char name[WGNX_CTL_CONF_NAME_MAX];
+                    static char name[ZTNX_CTL_CONF_NAME_MAX];
                     mutexLock(&g_mutex);
                     std::snprintf(name, sizeof name, "%s", g_conf_to_set);
                     mutexUnlock(&g_mutex);
@@ -210,19 +210,19 @@ namespace {
 
     bool g_have_ctl = false;
     bool g_valid = false;  // ctl::Snapshot::valid
-    WgnxCtlStatus g_status = {};
+    ZtnxCtlStatus g_status = {};
     bool g_status_ok = false;
 
     // ---- stop and start ------------------------------------------------------
 
-    // Stop asks the sysmodule to end itself (wgnx:ctl Stop): it refuses
+    // Stop asks the sysmodule to end itself (ztnx:ctl Stop): it refuses
     // whenever exiting could disturb the console or an app. Start launches it
     // through pm. Neither touches its boot flag.
-    constexpr u64 SysmoduleProgramId = 0x4200000000005747;
-    constexpr const char DisabledPath[] = "sdmc:/config/wireguard-nx/disabled";
+    constexpr u64 SysmoduleProgramId = 0x4200000000005A54;
+    constexpr const char DisabledPath[] = "sdmc:/config/zerotier-nx/disabled";
     // Our system tick, so the sysmodule's crash guard knows this start isn't
     // a boot.
-    constexpr const char StartRequestedPath[] = "sdmc:/config/wireguard-nx/start_requested";
+    constexpr const char StartRequestedPath[] = "sdmc:/config/zerotier-nx/start_requested";
 
     bool SysmoduleRunning() {
         u64 pid = 0;
@@ -276,7 +276,7 @@ namespace {
     void FinishStop() {
         SetPhase(Phase::Idle);
         // A failed request most likely means it exited before replying.
-        if (R_FAILED(ctl::g_stop_rc) || ctl::g_stop_code == WGNX_CTL_STOP_OK) {
+        if (R_FAILED(ctl::g_stop_rc) || ctl::g_stop_code == ZTNX_CTL_STOP_OK) {
             ctl::g_wanted = false;
             ctl::Wake();
             g_have_ctl = g_status_ok = false;
@@ -284,10 +284,10 @@ namespace {
             return;
         }
         switch (ctl::g_stop_code) {
-            case WGNX_CTL_STOP_HOMEBREW:
-                Say("Close homebrew apps first: they have", "connections through wireguard-nx.");
+            case ZTNX_CTL_STOP_HOMEBREW:
+                Say("Close homebrew apps first: they have", "connections through zerotier-nx.");
                 break;
-            case WGNX_CTL_STOP_BUSY:
+            case ZTNX_CTL_STOP_BUSY:
                 Say("Busy (sleep, wake or setting up).", "Try again in a moment.");
                 break;
             default:
@@ -314,7 +314,7 @@ namespace {
             return;
         }
         if (FileExists(DisabledPath)) {
-            Say("config/wireguard-nx/disabled keeps it off.", "Delete that file to start it.");
+            Say("config/zerotier-nx/disabled keeps it off.", "Delete that file to start it.");
             return;
         }
         tsl::hlp::doWithSDCardHandle([] {
@@ -353,8 +353,8 @@ namespace {
 
     // Why the sysmodule isn't running, read from the SD card when the overlay
     // opens (the crash guard's file, the kill switch, or a missing boot flag).
-    constexpr const char CrashedPath[] = "sdmc:/config/wireguard-nx/crashed";
-    constexpr const char Boot2Path[] = "sdmc:/atmosphere/contents/4200000000005747/flags/boot2.flag";
+    constexpr const char CrashedPath[] = "sdmc:/config/zerotier-nx/crashed";
+    constexpr const char Boot2Path[] = "sdmc:/atmosphere/contents/4200000000005A54/flags/boot2.flag";
     char g_crashed[160] = {};   // first line of the crash guard's reason
     char g_not_started[200] = {};  // why it declined to start (too little memory)
     bool g_no_boot_flag = false;
@@ -369,7 +369,7 @@ namespace {
                 std::fclose(f);
             }
             g_not_started[0] = 0;
-            if (FILE *f = std::fopen("sdmc:/config/wireguard-nx/not_started", "r")) {
+            if (FILE *f = std::fopen("sdmc:/config/zerotier-nx/not_started", "r")) {
                 if (std::fgets(g_not_started, sizeof g_not_started, f)) g_not_started[std::strcspn(g_not_started, "\r\n")] = 0;
                 std::fclose(f);
             }
@@ -382,11 +382,11 @@ namespace {
         });
     }
 
-    // Clears the crash guard and starts wireguard-nx again.
+    // Clears the crash guard and starts zerotier-nx again.
     void TurnBackOn() {
         tsl::hlp::doWithSDCardHandle([] {
-            for (const char *p : {CrashedPath, "sdmc:/config/wireguard-nx/starting", "sdmc:/config/wireguard-nx/sleep_failures",
-                                  "sdmc:/config/wireguard-nx/sleeping"}) {
+            for (const char *p : {CrashedPath, "sdmc:/config/zerotier-nx/starting", "sdmc:/config/zerotier-nx/sleep_failures",
+                                  "sdmc:/config/zerotier-nx/sleeping"}) {
                 std::remove(p);
             }
         });
@@ -402,7 +402,7 @@ namespace {
                 break;
             case Phase::Exiting:
                 // Gone from pm and from sm: a new instance can register again.
-                if (!SysmoduleRunning() && !ServiceExists(WGNX_CTL_SERVICE)) {
+                if (!SysmoduleRunning() && !ServiceExists(ZTNX_CTL_SERVICE)) {
                     ctl::g_wanted = true;
                     SetPhase(Phase::Idle);
                     ReadWhyNotRunning();
@@ -415,7 +415,7 @@ namespace {
                 if (!SysmoduleRunning()) {
                     SetPhase(Phase::Idle);
                     ReadWhyNotRunning();
-                    if (g_we_started) Say("It stopped right away. See", "config/wireguard-nx/sysmodule.log.");
+                    if (g_we_started) Say("It stopped right away. See", "config/zerotier-nx/sysmodule.log.");
                     g_we_started = false;
                 } else if (g_have_ctl) {  // the ctl thread opens the session
                     SetPhase(Phase::Idle);
@@ -431,11 +431,11 @@ namespace {
     }
 
     char g_last_error[192] = {};
-    char g_conf_name[WGNX_CTL_CONF_NAME_MAX] = {};
-    WgnxPeerInfo g_peers[WGNX_CTL_MAX_PEERS] = {};
-    u32 g_peer_count = 0;  // configured; the first (up to WGNX_CTL_MAX_PEERS) are in g_peers
+    char g_conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
+    ZtnxPeerInfo g_peers[ZTNX_CTL_MAX_PEERS] = {};
+    u32 g_peer_count = 0;  // configured; the first (up to ZTNX_CTL_MAX_PEERS) are in g_peers
     u32 g_peers_shown = 0;  // how many are in g_peers
-    u8 g_by_name[WGNX_CTL_MAX_PEERS] = {};  // g_peers indices in name order
+    u8 g_by_name[ZTNX_CTL_MAX_PEERS] = {};  // g_peers indices in name order
 
     void CtlSetPaused(bool paused) {
         if (!g_have_ctl || g_phase != Phase::Idle) return;
@@ -461,19 +461,19 @@ namespace {
         ctl::g_set_conf_done = false;
         char line[96];
         if (R_FAILED(ctl::g_set_conf_rc)) {
-            Say("No answer from wireguard-nx.", "Try again in a moment.");
+            Say("No answer from zerotier-nx.", "Try again in a moment.");
             return;
         }
         switch (ctl::g_set_conf_code) {
-            case WGNX_CTL_CONF_OK:
+            case ZTNX_CTL_CONF_OK:
                 std::snprintf(line, sizeof line, "Switched to %s.", ctl::g_conf_set);
                 Note(line);
                 break;
-            case WGNX_CTL_CONF_NOT_FOUND:
+            case ZTNX_CTL_CONF_NOT_FOUND:
                 std::snprintf(line, sizeof line, "%s: not found.", ctl::g_conf_set);
                 Say(line);
                 break;
-            case WGNX_CTL_CONF_INVALID:
+            case ZTNX_CTL_CONF_INVALID:
                 std::snprintf(line, sizeof line, "%s doesn't load:", ctl::g_conf_set);
                 Say(line, "see the status above.");
                 break;
@@ -492,7 +492,7 @@ namespace {
         g_status = s.status;
         std::memcpy(g_peers, s.peers, sizeof g_peers);
         g_peer_count = s.peer_count;
-        g_peers_shown = std::min<u32>(g_peer_count, WGNX_CTL_MAX_PEERS);
+        g_peers_shown = std::min<u32>(g_peer_count, ZTNX_CTL_MAX_PEERS);
         for (u32 i = 0; i < g_peers_shown; i++) g_by_name[i] = static_cast<u8>(i);
         // Listed by name, so rows stay put as traffic moves between peers.
         std::sort(g_by_name, g_by_name + g_peers_shown, [](u8 a, u8 b) { return std::strcmp(g_peers[a].name, g_peers[b].name) < 0; });
@@ -586,10 +586,10 @@ namespace {
     }
 
     // A peer's state in a few words: when it last handshook, or why not.
-    void PeerState(const WgnxPeerInfo &p, char *out, size_t cap) {
+    void PeerState(const ZtnxPeerInfo &p, char *out, size_t cap) {
         if (p.last_handshake_s != UINT32_MAX) {
             Ago(p.last_handshake_s, out, cap);
-        } else if (p.flags & WGNX_PEER_RESOLVING) {
+        } else if (p.flags & ZTNX_PEER_RESOLVING) {
             std::snprintf(out, cap, "Resolving...");
         } else if (!p.endpoint_port) {
             std::snprintf(out, cap, "Waiting for it");
@@ -599,14 +599,14 @@ namespace {
     }
 
     // Green: a session; yellow: had one; grey: never.
-    tsl::Color StateColor(const WgnxPeerInfo &p) {
-        if (p.flags & WGNX_PEER_SESSION) return Green;
+    tsl::Color StateColor(const ZtnxPeerInfo &p) {
+        if (p.flags & ZTNX_PEER_SESSION) return Green;
         return p.last_handshake_s != UINT32_MAX ? Yellow : Grey;
     }
 
     // No internet connection (not while paused or stopping: then it's moot).
     bool Offline() {
-        return (g_status.flags & WGNX_CTL_FLAG_OFFLINE) && g_status.state != WGNX_CTL_PAUSED && g_status.state != WGNX_CTL_STOPPING;
+        return (g_status.flags & ZTNX_CTL_FLAG_OFFLINE) && g_status.state != ZTNX_CTL_PAUSED && g_status.state != ZTNX_CTL_STOPPING;
     }
 
     // Its engine loop hasn't run for a while (short pauses are normal: a
@@ -623,7 +623,7 @@ namespace {
         // The sysmodule hasn't answered a request: it's busy or stuck.
         if (const u64 busy = ctl::BusySeconds(); busy >= 2) {
             char since[64];
-            std::snprintf(since, sizeof since, "No reply from wireguard-nx for %llu seconds.", static_cast<unsigned long long>(busy));
+            std::snprintf(since, sizeof since, "No reply from zerotier-nx for %llu seconds.", static_cast<unsigned long long>(busy));
             r->drawString("Not responding", false, x + 20, y + 40, 30, r->a(Red));
             r->drawString(since, false, x + 20, y + 75, 17, r->a(Grey));
             r->drawString("Restart the console if this continues.", false, x + 20, y + 100, 17, r->a(Grey));
@@ -641,14 +641,14 @@ namespace {
         }
         if (g_status_ok) {
             switch (g_status.state) {
-                case WGNX_CTL_STARTING:    state = "Starting...";   color = Blue;   break;
-                case WGNX_CTL_CONNECTING:  state = "Connecting..."; color = Blue;   break;
-                case WGNX_CTL_CONNECTED:   state = g_status.peers_up ? "Connected" : "Idle"; color = g_status.peers_up ? Green : Yellow; break;
-                case WGNX_CTL_PAUSED:      state = "Paused";        color = Grey;   break;
-                case WGNX_CTL_STOPPING:    state = "Stopping...";   color = Grey;   break;
+                case ZTNX_CTL_STARTING:    state = "Starting...";   color = Blue;   break;
+                case ZTNX_CTL_CONNECTING:  state = "Connecting..."; color = Blue;   break;
+                case ZTNX_CTL_CONNECTED:   state = g_status.peers_up ? "Connected" : "Idle"; color = g_status.peers_up ? Green : Yellow; break;
+                case ZTNX_CTL_PAUSED:      state = "Paused";        color = Grey;   break;
+                case ZTNX_CTL_STOPPING:    state = "Stopping...";   color = Grey;   break;
             }
-            if ((g_status.flags & WGNX_CTL_FLAG_CONF_ERROR) && g_status.state != WGNX_CTL_PAUSED && g_status.state != WGNX_CTL_STOPPING) {
-                state = (g_status.flags & WGNX_CTL_FLAG_CONF_MISSING) ? "No config" : "Config error";
+            if ((g_status.flags & ZTNX_CTL_FLAG_CONF_ERROR) && g_status.state != ZTNX_CTL_PAUSED && g_status.state != ZTNX_CTL_STOPPING) {
+                state = (g_status.flags & ZTNX_CTL_FLAG_CONF_MISSING) ? "No config" : "Config error";
                 color = Red;
             }
             if (Offline()) {
@@ -663,7 +663,7 @@ namespace {
         char line[128];
         if (!g_status_ok) {
             if (g_crashed[0]) {
-                // "wireguard-nx stopped itself: <why>." -> show the reason.
+                // "zerotier-nx stopped itself: <why>." -> show the reason.
                 const char *why = std::strstr(g_crashed, ": ");
                 why = why ? why + 2 : g_crashed;
                 r->drawString("It turned itself off after failures:", false, x + 20, y + 75, 17, r->a(Grey));
@@ -673,13 +673,13 @@ namespace {
                 r->drawString("It didn't start: too little system memory.", false, x + 20, y + 75, 17, r->a(Grey));
                 r->drawString("Other sysmodules use the rest; turn one off.", false, x + 20, y + 100, 17, r->a(Grey));
             } else if (g_disabled) {
-                r->drawString("config/wireguard-nx/disabled keeps it off.", false, x + 20, y + 75, 17, r->a(Grey));
+                r->drawString("config/zerotier-nx/disabled keeps it off.", false, x + 20, y + 75, 17, r->a(Grey));
                 r->drawString("Delete that file to start it.", false, x + 20, y + 100, 17, r->a(Grey));
             } else if (g_no_boot_flag) {
-                r->drawString("The wireguard-nx sysmodule isn't running,", false, x + 20, y + 75, 17, r->a(Grey));
+                r->drawString("The zerotier-nx sysmodule isn't running,", false, x + 20, y + 75, 17, r->a(Grey));
                 r->drawString("and its boot setting in Sysmodules is off.", false, x + 20, y + 100, 17, r->a(Grey));
             } else {
-                r->drawString("The wireguard-nx sysmodule isn't running.", false, x + 20, y + 75, 17, r->a(Grey));
+                r->drawString("The zerotier-nx sysmodule isn't running.", false, x + 20, y + 75, 17, r->a(Grey));
                 r->drawString("It starts at boot, or with Start below.", false, x + 20, y + 100, 17, r->a(Grey));
             }
             return;
@@ -689,11 +689,11 @@ namespace {
             r->drawString("It reconnects once the Switch is back online.", false, x + 20, y + 102, 17, r->a(Grey));
             return;
         }
-        if ((g_status.flags & WGNX_CTL_FLAG_CONF_ERROR) && g_status.state != WGNX_CTL_PAUSED) {
+        if ((g_status.flags & ZTNX_CTL_FLAG_CONF_ERROR) && g_status.state != ZTNX_CTL_PAUSED) {
             // "wg0.conf: line 12: PublicKey: not valid base64"
             DrawTwoLines(r, g_last_error[0] ? g_last_error : "The .conf didn't load.", x + 20, y + 75, 15, Grey, 46);
             // A missing one's message already says what to do.
-            if (!(g_status.flags & WGNX_CTL_FLAG_CONF_MISSING))
+            if (!(g_status.flags & ZTNX_CTL_FLAG_CONF_MISSING))
                 r->drawString("Fix it, or pick another one under Config.", false, x + 20, y + 120, 15, r->a(Grey));
             return;
         }
@@ -707,23 +707,23 @@ namespace {
         // Our address only while it's usable (it stays known while paused).
         s32 ly = y + 75;
         const u8 *ip = g_status.ipv4;
-        if (ip[0] && g_status.state == WGNX_CTL_CONNECTED) {
+        if (ip[0] && g_status.state == ZTNX_CTL_CONNECTED) {
             std::snprintf(line, sizeof line, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
             r->drawString(line, false, x + 20, ly, 20, r->a(White));
             ly += 27;
         }
-        if (g_status.state == WGNX_CTL_CONNECTED && g_status.peers_up == 0) {
+        if (g_status.state == ZTNX_CTL_CONNECTED && g_status.peers_up == 0) {
             std::snprintf(line, sizeof line, "No peer has answered in the last 3 minutes.");
-        } else if (g_status.state == WGNX_CTL_CONNECTED) {
+        } else if (g_status.state == ZTNX_CTL_CONNECTED) {
             std::snprintf(line, sizeof line, "%u of %u peer%s up", g_status.peers_up, g_status.peers, g_status.peers == 1 ? "" : "s");
-        } else if (g_status.state == WGNX_CTL_CONNECTING) {
+        } else if (g_status.state == ZTNX_CTL_CONNECTING) {
             std::snprintf(line, sizeof line, g_status.peers ? "No handshake yet (%u peer%s)." : "No peers in the .conf.", g_status.peers, g_status.peers == 1 ? "" : "s");
         } else {
             std::snprintf(line, sizeof line, "%u peer%s", g_status.peers, g_status.peers == 1 ? "" : "s");
         }
         r->drawString(line, false, x + 20, ly, 17, r->a(Grey));
         ly += 28;
-        if (g_last_error[0] && g_status.state != WGNX_CTL_CONNECTED && g_status.state != WGNX_CTL_PAUSED) {
+        if (g_last_error[0] && g_status.state != ZTNX_CTL_CONNECTED && g_status.state != ZTNX_CTL_PAUSED) {
             char error[sizeof g_last_error + 16];
             std::snprintf(error, sizeof error, "Last error: %s", g_last_error);
             DrawTwoLines(r, error, x + 20, ly, 15, Grey, 46);
@@ -738,15 +738,15 @@ namespace {
             ty += 28;
         };
         if (!g_status_ok) return;
-        if (g_status.flags & WGNX_CTL_FLAG_MITM) line("Homebrew apps reach tunnel addresses.", White);
-        if (g_status.flags & WGNX_CTL_FLAG_HOSTS) line("Peer names resolve (e.g. in Moonlight).", White);
-        if (g_status.state == WGNX_CTL_PAUSED) line("Paused: tunnel connections fail until resumed.", Grey);
+        if (g_status.flags & ZTNX_CTL_FLAG_MITM) line("Homebrew apps reach tunnel addresses.", White);
+        if (g_status.flags & ZTNX_CTL_FLAG_HOSTS) line("Peer names resolve (e.g. in Moonlight).", White);
+        if (g_status.state == ZTNX_CTL_PAUSED) line("Paused: tunnel connections fail until resumed.", Grey);
         if (g_status.memory_kb) {
             char mem[96];
             std::snprintf(mem, sizeof mem, "Memory: %u.%u MB. System free: %u.%u MB.", g_status.memory_kb / 1024,
                           g_status.memory_kb % 1024 * 10 / 1024, g_status.system_free_kb / 1024, g_status.system_free_kb % 1024 * 10 / 1024);
             // Little left for other modules: say so (it can crash the console).
-            line(mem, g_status.system_free_kb < WGNX_CTL_LOW_SYSTEM_FREE_KB ? Red : Grey);
+            line(mem, g_status.system_free_kb < ZTNX_CTL_LOW_SYSTEM_FREE_KB ? Red : Grey);
         }
     }
 
@@ -760,7 +760,7 @@ namespace {
     }
 
     void DrawTip(tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
-        r->drawString("Stop ends wireguard-nx until the next boot.", false, x + 20, y + 25, 15, r->a(Grey));
+        r->drawString("Stop ends zerotier-nx until the next boot.", false, x + 20, y + 25, 15, r->a(Grey));
         r->drawString("To keep it off, turn off its boot setting", false, x + 20, y + 47, 15, r->a(Grey));
         r->drawString("in Sysmodules.", false, x + 20, y + 69, 15, r->a(Grey));
     }
@@ -768,8 +768,8 @@ namespace {
     // ---- settings -------------------------------------------------------------
 
     // Switches the sysmodule reads as marker files: present = off.
-    constexpr const char NoNoticePath[] = "sdmc:/config/wireguard-nx/no-connect-notice";
-    constexpr const char NoUpdateCheckPath[] = "sdmc:/config/wireguard-nx/no-update-check";
+    constexpr const char NoNoticePath[] = "sdmc:/config/zerotier-nx/no-connect-notice";
+    constexpr const char NoUpdateCheckPath[] = "sdmc:/config/zerotier-nx/no-update-check";
 
     bool MarkerExists(const char *path) {
         bool exists = false;
@@ -800,10 +800,10 @@ namespace {
     // between items, and items can't safely come and go while one has it,
     // but peers come and go all the time.
     // The peer whose details page is open.
-    char g_detail_name[sizeof(WgnxPeerInfo::name)] = {};
+    char g_detail_name[sizeof(ZtnxPeerInfo::name)] = {};
 
     void DrawPeer(tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
-        const WgnxPeerInfo *p = nullptr;
+        const ZtnxPeerInfo *p = nullptr;
         for (u32 i = 0; i < g_peers_shown; i++)
             if (std::strcmp(g_peers[i].name, g_detail_name) == 0) p = &g_peers[i];
         if (!p) {
@@ -824,8 +824,8 @@ namespace {
         line("Address", v, White);
         if (p->endpoint_port) {
             std::snprintf(v, sizeof v, "%u.%u.%u.%u:%u%s", p->endpoint_ip[0], p->endpoint_ip[1], p->endpoint_ip[2], p->endpoint_ip[3], p->endpoint_port,
-                          (p->flags & WGNX_PEER_ROAMED) ? " (moved)" : (p->flags & WGNX_PEER_ENDPOINT_NAME) ? " (by name)" : "");
-        } else if (p->flags & WGNX_PEER_RESOLVING) {
+                          (p->flags & ZTNX_PEER_ROAMED) ? " (moved)" : (p->flags & ZTNX_PEER_ENDPOINT_NAME) ? " (by name)" : "");
+        } else if (p->flags & ZTNX_PEER_RESOLVING) {
             std::snprintf(v, sizeof v, "resolving its name...");
         } else {
             std::snprintf(v, sizeof v, "none: it must contact us");
@@ -842,15 +842,15 @@ namespace {
         if (p->keepalive_s) std::snprintf(v, sizeof v, "every %u s", p->keepalive_s);
         else std::snprintf(v, sizeof v, "off");
         line("Keepalive", v, White);
-        std::snprintf(v, sizeof v, "%u prefix%s%s", p->allowed_ips, p->allowed_ips == 1 ? "" : "es", (p->flags & WGNX_PEER_DEFAULT_ROUTE) ? " (default route)" : "");
+        std::snprintf(v, sizeof v, "%u prefix%s%s", p->allowed_ips, p->allowed_ips == 1 ? "" : "es", (p->flags & ZTNX_PEER_DEFAULT_ROUTE) ? " (default route)" : "");
         line("Allowed IPs", v, White);
-        line("Preshared key", (p->flags & WGNX_PEER_PSK) ? "yes" : "no", White);
+        line("Preshared key", (p->flags & ZTNX_PEER_PSK) ? "yes" : "no", White);
     }
 
     class PeerGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("WireGuard", g_detail_name);
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", g_detail_name);
                 auto *list = new tsl::elm::List();
                 list->addItem(new Drawer(DrawPeer), 290);
                 frame->setContent(list);
@@ -867,32 +867,32 @@ namespace {
             u32 m_frames = 0;
     };
 
-    // The .conf files in config/wireguard-nx, to switch between. The list
+    // The .conf files in config/zerotier-nx, to switch between. The list
     // is built once when the page opens (Tesla's items can't come and go
     // while one has focus).
     class ConfGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("WireGuard", "Config");
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Config");
                 auto *list = new tsl::elm::List();
                 struct Name {
-                    char s[WGNX_CTL_CONF_NAME_MAX];
+                    char s[ZTNX_CTL_CONF_NAME_MAX];
                 };
                 static Name names[16];
                 int n = 0;
                 tsl::hlp::doWithSDCardHandle([&] {
-                    if (DIR *d = opendir("sdmc:/config/wireguard-nx")) {
+                    if (DIR *d = opendir("sdmc:/config/zerotier-nx")) {
                         while (dirent *e = readdir(d)) {
                             const size_t len = std::strlen(e->d_name);
-                            if (n >= 16 || len < 6 || len >= WGNX_CTL_CONF_NAME_MAX || std::strcmp(e->d_name + len - 5, ".conf") != 0) continue;
-                            std::snprintf(names[n++].s, WGNX_CTL_CONF_NAME_MAX, "%s", e->d_name);
+                            if (n >= 16 || len < 6 || len >= ZTNX_CTL_CONF_NAME_MAX || std::strcmp(e->d_name + len - 5, ".conf") != 0) continue;
+                            std::snprintf(names[n++].s, ZTNX_CTL_CONF_NAME_MAX, "%s", e->d_name);
                         }
                         closedir(d);
                     }
                 });
                 std::sort(names, names + n, [](const Name &a, const Name &b) { return std::strcmp(a.s, b.s) < 0; });
                 if (n == 0) {
-                    list->addItem(new tsl::elm::ListItem("No .conf files in config/wireguard-nx"));
+                    list->addItem(new tsl::elm::ListItem("No .conf files in config/zerotier-nx"));
                 }
                 for (int i = 0; i < n; i++) {
                     const char *name = names[i].s;
@@ -907,7 +907,7 @@ namespace {
                 }
                 list->addItem(new Drawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
                     r->drawString("Pick one to switch to it now and at every boot.", false, x + 20, y + 25, 15, r->a(Grey));
-                    r->drawString("Put more .conf files in config/wireguard-nx.", false, x + 20, y + 47, 15, r->a(Grey));
+                    r->drawString("Put more .conf files in config/zerotier-nx.", false, x + 20, y + 47, 15, r->a(Grey));
                 }), 70);
                 frame->setContent(list);
                 return frame;
@@ -938,7 +938,7 @@ namespace {
                 Follow(n);
                 const s32 top = y + RowsTop, visible = Visible(h);
                 for (u32 row = m_top; row < n && row < m_top + static_cast<u32>(visible); row++) {
-                    const WgnxPeerInfo &p = g_peers[g_by_name[row]];
+                    const ZtnxPeerInfo &p = g_peers[g_by_name[row]];
                     const s32 ry = top + static_cast<s32>(row - m_top) * RowHeight;
                     if (row == m_sel) {
                         r->drawRect(x + 6, ry, w - 12, RowHeight, r->a(Selected));  // a 2-pixel border
@@ -1066,7 +1066,7 @@ namespace {
             static constexpr u32 NameTurn = 0, PathTurn = 1;
 
             u32 m_sel = 0, m_top = 0;
-            char m_sel_name[sizeof(WgnxPeerInfo::name)] = {};
+            char m_sel_name[sizeof(ZtnxPeerInfo::name)] = {};
             s32 m_scroll = 0, m_wait = 0;
             u32 m_turn = NameTurn;
             u32 m_repeat = 0;
@@ -1075,7 +1075,7 @@ namespace {
     class PeersGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("WireGuard", "Connections");
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Connections");
                 frame->setContent(new PeerTable());
                 return frame;
             }
@@ -1094,12 +1094,12 @@ namespace {
         public:
             tsl::elm::Element *createUI() override {
                 Refresh();
-                auto *frame = new tsl::elm::OverlayFrame("WireGuard", "wireguard-nx " APP_VERSION);
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "zerotier-nx " APP_VERSION);
                 auto *list = new tsl::elm::List();
                 list->addItem(new Drawer(DrawStatus), 135);
                 if (!g_status_ok) ReadWhyNotRunning();
 
-                m_toggle = new tsl::elm::ToggleListItem("WireGuard", !(g_status_ok && g_status.state == WGNX_CTL_PAUSED));
+                m_toggle = new tsl::elm::ToggleListItem("ZeroTier", !(g_status_ok && g_status.state == ZTNX_CTL_PAUSED));
                 m_toggle->setStateChangedListener([](bool on) {
                     CtlSetPaused(!on);
                     Refresh();
@@ -1162,7 +1162,7 @@ namespace {
                 if (++m_frames % 30 != 0) return;
                 Poll();
                 Refresh();
-                const bool on = !(g_status_ok && g_status.state == WGNX_CTL_PAUSED);
+                const bool on = !(g_status_ok && g_status.state == ZTNX_CTL_PAUSED);
                 if (m_toggle && !ctl::g_pause_pending && m_toggle->getState() != on) m_toggle->setState(on);
                 if (m_peers) {
                     const std::string value = PeersValue();
@@ -1191,14 +1191,14 @@ namespace {
             enum class Action { None, Stop, Start, TurnBackOn };
 
             static std::string PeersValue() {
-                if (!g_status_ok || g_status.state == WGNX_CTL_STARTING) return "";
+                if (!g_status_ok || g_status.state == ZTNX_CTL_STARTING) return "";
                 if (g_peer_count == 0) return "None";
                 return std::to_string(g_status.peers_up) + " of " + std::to_string(g_peer_count) + " up";
             }
 
             static Action PowerAction() {
                 if (g_phase != Phase::Idle) return Action::None;
-                if (g_have_ctl && g_status_ok) return g_status.state == WGNX_CTL_STOPPING ? Action::None : Action::Stop;
+                if (g_have_ctl && g_status_ok) return g_status.state == ZTNX_CTL_STOPPING ? Action::None : Action::Stop;
                 if (SysmoduleRunning()) return Action::None;
                 return g_crashed[0] ? Action::TurnBackOn : Action::Start;
             }
@@ -1210,8 +1210,8 @@ namespace {
                     case Phase::Starting: return "Starting...";
                     case Phase::Idle:     break;
                 }
-                if (g_have_ctl && g_status_ok) return g_status.state == WGNX_CTL_STOPPING ? "Restart the console to finish" : "Stop wireguard-nx";
-                return g_crashed[0] ? "Turn back on" : "Start wireguard-nx";
+                if (g_have_ctl && g_status_ok) return g_status.state == ZTNX_CTL_STOPPING ? "Restart the console to finish" : "Stop zerotier-nx";
+                return g_crashed[0] ? "Turn back on" : "Start zerotier-nx";
             }
 
             tsl::elm::ToggleListItem *m_toggle = nullptr;
@@ -1229,7 +1229,7 @@ namespace {
     // With Ultrahand installed, hiding exits instead, back to a hidden menu.
     bool g_exit_on_hide = false;
 
-    class WireGuardOverlay : public tsl::Overlay {
+    class ZeroTierOverlay : public tsl::Overlay {
         public:
             void initServices() override {
                 ctl::Start();
@@ -1261,5 +1261,5 @@ namespace {
 }
 
 int main(int argc, char **argv) {
-    return tsl::loop<WireGuardOverlay>(argc, argv);
+    return tsl::loop<ZeroTierOverlay>(argc, argv);
 }

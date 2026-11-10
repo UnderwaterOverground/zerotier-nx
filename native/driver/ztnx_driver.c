@@ -1,7 +1,7 @@
-// See wgnx_driver.h.
-#include "wgnx_driver.h"
+// See ztnx_driver.h.
+#include "ztnx_driver.h"
 
-#include "wgnx_dns.h"
+#include "ztnx_dns.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -21,16 +21,16 @@
 #include <sys/iosupport.h>
 #endif
 
-#ifdef WGNX_NO_STDIO
+#ifdef ZTNX_NO_STDIO
 // Builds without newlib's printf (the sysmodule) supply this instead.
-int wgnx_snprintf(char *dst, size_t size, const char *fmt, ...);
-#define snprintf wgnx_snprintf
+int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...);
+#define snprintf ztnx_snprintf
 #endif
 
 // Datagrams read per readiness report: the rest wait for the next round, so
 // a socket that keeps "returning" something can't hold the loop.
 #define UDP_RECV_BATCH 64
-// Rounds in a row wgnx_driver_poll may skip poll() while the socket is
+// Rounds in a row ztnx_driver_poll may skip poll() while the socket is
 // backlogged, before it polls anyway (for the caller's other fds).
 #define UDP_BACKLOG_ROUNDS 8
 // Datagrams are read UDP_STAGED at a time into sbuf (page-aligned: on the
@@ -42,11 +42,11 @@ int wgnx_snprintf(char *dst, size_t size, const char *fmt, ...);
 
 static const char *volatile g_step;
 #define STEP(s) (g_step = (s))
-const char *wgnx_driver_step(void) { return g_step; }
+const char *ztnx_driver_step(void) { return g_step; }
 
-struct WgnxDriver {
-    WgnxEngine *engine;
-    wgnx_event_fn on_event;
+struct ZtnxDriver {
+    ZtnxEngine *engine;
+    ztnx_event_fn on_event;
     void *ctx;
     int udp_fd;
     uint16_t udp_port;
@@ -59,10 +59,10 @@ struct WgnxDriver {
     struct {
         const uint8_t *data;
         size_t len;
-        WgnxAddr src;
+        ZtnxAddr src;
     } staged[UDP_STAGED];
     int n_staged, staged_all;  // staged_all: the socket was drained
-    int prefetched;            // staged by wgnx_driver_prefetch, without the caller's lock
+    int prefetched;            // staged by ztnx_driver_prefetch, without the caller's lock
     int backlog;               // the last prefetch filled a batch: likely more queued
     int backlog_rounds;        // polls skipped in a row for it
     // Batched receive (Switch): 1 works, 0 not known yet, -1 off (and the
@@ -71,14 +71,14 @@ struct WgnxDriver {
     int mmsg_state, mmsg_errno, mmsg_misses;
 };
 
-uint64_t wgnx_driver_now_ns(void) {
+uint64_t ztnx_driver_now_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-WgnxDriver *wgnx_driver_new(WgnxEngine *engine, wgnx_event_fn on_event, void *ctx) {
-    WgnxDriver *d = calloc(1, sizeof *d);
+ZtnxDriver *ztnx_driver_new(ZtnxEngine *engine, ztnx_event_fn on_event, void *ctx) {
+    ZtnxDriver *d = calloc(1, sizeof *d);
     if (!d) return NULL;
     d->sbuf = aligned_alloc(0x1000, SBUF_SIZE);
     if (!d->sbuf) {
@@ -99,23 +99,23 @@ WgnxDriver *wgnx_driver_new(WgnxEngine *engine, wgnx_event_fn on_event, void *ct
     return d;
 }
 
-void wgnx_driver_free(WgnxDriver *d) {
+void ztnx_driver_free(ZtnxDriver *d) {
     if (!d) return;
     free(d->sbuf);
     if (d->udp_fd >= 0) close(d->udp_fd);
     free(d);
 }
 
-void wgnx_driver_resolve_inline(WgnxDriver *d, int on) { d->resolve_inline = on; }
+void ztnx_driver_resolve_inline(ZtnxDriver *d, int on) { d->resolve_inline = on; }
 
-uint16_t wgnx_driver_udp_port(const WgnxDriver *d) { return d->udp_fd >= 0 ? d->udp_port : 0; }
+uint16_t ztnx_driver_udp_port(const ZtnxDriver *d) { return d->udp_fd >= 0 ? d->udp_port : 0; }
 
 static int set_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     return flags < 0 ? -1 : fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-static void to_wgnx_addr(const struct sockaddr_in *sin, WgnxAddr *out) {
+static void to_ztnx_addr(const struct sockaddr_in *sin, ZtnxAddr *out) {
     memset(out, 0, sizeof *out);
     out->family = 4;
     memcpy(out->ip, &sin->sin_addr, 4);
@@ -130,11 +130,11 @@ static void to_wgnx_addr(const struct sockaddr_in *sin, WgnxAddr *out) {
 // for a DNS socket and the update check's connection (a new socket that
 // doesn't fit fails with ENOBUFS). More would lose less still (under a
 // 28 Mbit/s stream, 160 KB lost up to 8% in bursts and 240 KB almost
-// nothing); WGNX_UDP_RCVBUF overrides it for experiments.
-#ifndef WGNX_UDP_RCVBUF
-#define WGNX_UDP_RCVBUF (160 * 1024)
+// nothing); ZTNX_UDP_RCVBUF overrides it for experiments.
+#ifndef ZTNX_UDP_RCVBUF
+#define ZTNX_UDP_RCVBUF (160 * 1024)
 #endif
-#define UDP_RCVBUF WGNX_UDP_RCVBUF
+#define UDP_RCVBUF ZTNX_UDP_RCVBUF
 
 static void grow_rcvbuf(int fd) {
     for (int size = UDP_RCVBUF; size >= 32 * 1024; size -= 32 * 1024) {
@@ -146,7 +146,7 @@ static void grow_rcvbuf(int fd) {
     }
 }
 
-int wgnx_driver_open_udp(WgnxDriver *d, uint16_t port) {
+int ztnx_driver_open_udp(ZtnxDriver *d, uint16_t port) {
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) return -1;
     struct sockaddr_in sin = {0};
@@ -164,7 +164,7 @@ int wgnx_driver_open_udp(WgnxDriver *d, uint16_t port) {
     return 0;
 }
 
-void wgnx_driver_suspend(WgnxDriver *d) {
+void ztnx_driver_suspend(ZtnxDriver *d) {
     if (d->udp_fd >= 0) {
         close(d->udp_fd);
         d->udp_fd = -1;
@@ -172,13 +172,13 @@ void wgnx_driver_suspend(WgnxDriver *d) {
     d->backlog = 0;
 }
 
-int wgnx_driver_resume(WgnxDriver *d) {
+int ztnx_driver_resume(ZtnxDriver *d) {
     if (d->udp_fd >= 0 || !d->udp_port) return 0;
     // Same port as before, so peers' notion of our endpoint stays valid.
-    return wgnx_driver_open_udp(d, d->udp_port) == 0 ? 0 : wgnx_driver_open_udp(d, 0);
+    return ztnx_driver_open_udp(d, d->udp_port) == 0 ? 0 : ztnx_driver_open_udp(d, 0);
 }
 
-static void udp_send(WgnxDriver *d, const WgnxAddr *to, const uint8_t *data, size_t len) {
+static void udp_send(ZtnxDriver *d, const ZtnxAddr *to, const uint8_t *data, size_t len) {
     STEP("UDP send");
     if (d->udp_fd < 0 || to->family != 4) return;  // IPv6 underlay: not yet
     struct sockaddr_in sin = {0};
@@ -191,18 +191,18 @@ static void udp_send(WgnxDriver *d, const WgnxAddr *to, const uint8_t *data, siz
 
 // Reads one datagram into buf. Returns its length, or -1 when there's
 // nothing (more) to read.
-static ssize_t udp_read(WgnxDriver *d, uint8_t *buf, size_t cap, WgnxAddr *src) {
+static ssize_t udp_read(ZtnxDriver *d, uint8_t *buf, size_t cap, ZtnxAddr *src) {
     struct sockaddr_in from;
     socklen_t flen = sizeof from;
     memset(&from, 0, sizeof from);
     ssize_t got = recvfrom(d->udp_fd, buf, cap, 0, (struct sockaddr *)&from, &flen);
     if (got < 0 || from.sin_family != AF_INET) return -1;
-    to_wgnx_addr(&from, src);
+    to_ztnx_addr(&from, src);
     return got;
 }
 
 // Reads datagrams one call each into sbuf's slots. Returns how many.
-static int stage_each(WgnxDriver *d) {
+static int stage_each(ZtnxDriver *d) {
     int n = 0;
     while (n < UDP_STAGED) {
         uint8_t *slot = d->sbuf + (size_t)n * UDP_SLOT;
@@ -232,7 +232,7 @@ static void put(uint8_t **p, const void *v, size_t n) {
     *p += n;
 }
 
-static int stage_batch(WgnxDriver *d, int *err) {
+static int stage_batch(ZtnxDriver *d, int *err) {
     __handle *h = __get_handle(d->udp_fd);
     if (!h || !h->fileStruct) {
         *err = 0;
@@ -310,7 +310,7 @@ static int stage_batch(WgnxDriver *d, int *err) {
         // its full capacity.
         if (msg_len >= 0 && (uint64_t)msg_len < len) len = (uint64_t)msg_len;
         if (!data || from.sin_family != AF_INET) continue;
-        to_wgnx_addr(&from, &d->staged[got].src);
+        to_ztnx_addr(&from, &d->staged[got].src);
         d->staged[got].data = data;
         d->staged[got++].len = (size_t)len;
     }
@@ -320,7 +320,7 @@ static int stage_batch(WgnxDriver *d, int *err) {
 
 // Reads up to UDP_STAGED datagrams into d->staged (called when the socket
 // was reported readable). Returns how many.
-static int stage(WgnxDriver *d) {
+static int stage(ZtnxDriver *d) {
 #ifdef __SWITCH__
     if (d->mmsg_state >= 0) {
         int err = 0;
@@ -346,7 +346,7 @@ static int stage(WgnxDriver *d) {
     return stage_each(d);
 }
 
-void wgnx_driver_prefetch(WgnxDriver *d, const struct pollfd *fds) {
+void ztnx_driver_prefetch(ZtnxDriver *d, const struct pollfd *fds) {
     d->n_staged = 0;
     d->staged_all = 0;
     d->prefetched = 1;
@@ -357,7 +357,7 @@ void wgnx_driver_prefetch(WgnxDriver *d, const struct pollfd *fds) {
     d->backlog = !d->staged_all;
 }
 
-int wgnx_driver_poll(WgnxDriver *d, struct pollfd *fds, int nfds, int wait_ms) {
+int ztnx_driver_poll(ZtnxDriver *d, struct pollfd *fds, int nfds, int wait_ms) {
     if (d->backlog && d->poll_udp >= 0 && d->backlog_rounds < UDP_BACKLOG_ROUNDS) {
         d->backlog_rounds++;
         for (int i = 0; i < nfds; i++) fds[i].revents = 0;
@@ -375,13 +375,13 @@ int wgnx_driver_poll(WgnxDriver *d, struct pollfd *fds, int nfds, int wait_ms) {
 // app reading what we deliver would wait out every read. A video frame
 // arrives as a burst of datagrams, and delivered all at once it overflows
 // the app's socket queue; the rest is read by the next round's prefetch.
-static void udp_receive(WgnxDriver *d) {
+static void udp_receive(ZtnxDriver *d) {
     int handled = 0;
     const int prefetched = d->prefetched;
     d->prefetched = 0;
     for (;;) {
         for (int i = 0; i < d->n_staged; i++)
-            wgnx_engine_udp(d->engine, &d->staged[i].src, d->staged[i].data, d->staged[i].len, wgnx_driver_now_ns());
+            ztnx_engine_udp(d->engine, &d->staged[i].src, d->staged[i].data, d->staged[i].len, ztnx_driver_now_ns());
         handled += d->n_staged;
         const int drained = d->staged_all;
         d->n_staged = 0;
@@ -393,42 +393,42 @@ static void udp_receive(WgnxDriver *d) {
     }
 }
 
-int wgnx_driver_batched_receive(WgnxDriver *d, int *bsd_errno) {
+int ztnx_driver_batched_receive(ZtnxDriver *d, int *bsd_errno) {
     if (bsd_errno) *bsd_errno = d->mmsg_errno;
     return d->mmsg_state;
 }
 
-// Answers a RESOLVE event with a blocking lookup (see wgnx_driver_resolve_inline).
-static void resolve_endpoint(WgnxDriver *d, const WgnxEvent *ev) {
+// Answers a RESOLVE event with a blocking lookup (see ztnx_driver_resolve_inline).
+static void resolve_endpoint(ZtnxDriver *d, const ZtnxEvent *ev) {
     STEP("endpoint lookup");
     uint32_t ip;
-    if (wgnx_resolve_ipv4(ev->text, &ip) != 0) return;
-    WgnxAddr addr;
+    if (ztnx_resolve_ipv4(ev->text, &ip) != 0) return;
+    ZtnxAddr addr;
     memset(&addr, 0, sizeof addr);
     addr.family = 4;
     memcpy(addr.ip, &ip, 4);
     addr.port = ev->port;
-    wgnx_engine_set_peer_endpoint(d->engine, ev->value, &addr, wgnx_driver_now_ns());
+    ztnx_engine_set_peer_endpoint(d->engine, ev->value, &addr, ztnx_driver_now_ns());
 }
 
 // Drains engine I/O requests and events.
-static void pump_engine(WgnxDriver *d) {
+static void pump_engine(ZtnxDriver *d) {
     STEP("engine I/O");
-    WgnxIo io;
-    while (wgnx_engine_poll_io(d->engine, &io))
-        if (io.kind == WGNX_IO_SEND_UDP) udp_send(d, &io.addr, io.data, io.len);
-    WgnxEvent ev;
-    while (wgnx_engine_poll_event(d->engine, &ev)) {
-        if (ev.kind == WGNX_EVENT_RESOLVE && d->resolve_inline) resolve_endpoint(d, &ev);
+    ZtnxIo io;
+    while (ztnx_engine_poll_io(d->engine, &io))
+        if (io.kind == ZTNX_IO_SEND_UDP) udp_send(d, &io.addr, io.data, io.len);
+    ZtnxEvent ev;
+    while (ztnx_engine_poll_event(d->engine, &ev)) {
+        if (ev.kind == ZTNX_EVENT_RESOLVE && d->resolve_inline) resolve_endpoint(d, &ev);
         if (d->on_event) d->on_event(d->ctx, &ev);
     }
 }
 
-void wgnx_driver_pump(WgnxDriver *d) { pump_engine(d); }
+void ztnx_driver_pump(ZtnxDriver *d) { pump_engine(d); }
 
-int wgnx_driver_prepare(WgnxDriver *d, struct pollfd *fds, int cap, int max_wait_ms, int *wait_ms) {
-    uint64_t now = wgnx_driver_now_ns();
-    if (now >= wgnx_engine_next_deadline(d->engine)) wgnx_engine_timeout(d->engine, now);
+int ztnx_driver_prepare(ZtnxDriver *d, struct pollfd *fds, int cap, int max_wait_ms, int *wait_ms) {
+    uint64_t now = ztnx_driver_now_ns();
+    if (now >= ztnx_engine_next_deadline(d->engine)) ztnx_engine_timeout(d->engine, now);
     pump_engine(d);
 
     int n = 0;
@@ -442,9 +442,9 @@ int wgnx_driver_prepare(WgnxDriver *d, struct pollfd *fds, int cap, int max_wait
         fds[n++].revents = 0;
     }
 
-    uint64_t deadline = wgnx_engine_next_deadline(d->engine);
+    uint64_t deadline = ztnx_engine_next_deadline(d->engine);
     d->poll_deadline = deadline;
-    now = wgnx_driver_now_ns();
+    now = ztnx_driver_now_ns();
     int wait = max_wait_ms;
     if (deadline <= now) {
         wait = 0;
@@ -455,25 +455,25 @@ int wgnx_driver_prepare(WgnxDriver *d, struct pollfd *fds, int cap, int max_wait
     return n;
 }
 
-int wgnx_driver_poll_stale(WgnxDriver *d, uint64_t until_ns) {
+int ztnx_driver_poll_stale(ZtnxDriver *d, uint64_t until_ns) {
     if (d->udp_fd != d->poll_udp_fd) return 1;
     // The poll's timeout is rounded up past the deadline it was set for, so
     // only a deadline earlier than that one is news.
-    const uint64_t deadline = wgnx_engine_next_deadline(d->engine);
+    const uint64_t deadline = ztnx_engine_next_deadline(d->engine);
     return deadline < d->poll_deadline && deadline < until_ns;
 }
 
-void wgnx_driver_dispatch(WgnxDriver *d, const struct pollfd *fds) {
+void ztnx_driver_dispatch(ZtnxDriver *d, const struct pollfd *fds) {
     if (d->poll_udp >= 0 && (fds[d->poll_udp].revents & POLLIN)) udp_receive(d);
     pump_engine(d);
 }
 
-int wgnx_driver_run_once(WgnxDriver *d, int max_wait_ms) {
-    struct pollfd fds[WGNX_DRIVER_MAX_FDS];
+int ztnx_driver_run_once(ZtnxDriver *d, int max_wait_ms) {
+    struct pollfd fds[ZTNX_DRIVER_MAX_FDS];
     int wait;
-    int n = wgnx_driver_prepare(d, fds, WGNX_DRIVER_MAX_FDS, max_wait_ms, &wait);
+    int n = ztnx_driver_prepare(d, fds, ZTNX_DRIVER_MAX_FDS, max_wait_ms, &wait);
     int rc = poll(fds, (nfds_t)n, wait);
     if (rc < 0 && errno != EINTR) return -1;
-    if (rc > 0) wgnx_driver_dispatch(d, fds);
+    if (rc > 0) ztnx_driver_dispatch(d, fds);
     return 0;
 }

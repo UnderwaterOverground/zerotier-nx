@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Stages a ready-to-copy SD card tree in dist/sd: Atmosphère + fusee, hekate,
-# the wireguard-nx sysmodule (starts at boot) and overlay, the test app and an
+# the zerotier-nx sysmodule (starts at boot) and overlay, the test app and an
 # example config. Copy dist/sd/* onto the SD
 # card root, merging folders. Existing configs (hekate_ipl.ini, atmosphere
-# config, wireguard-nx config) are not in this tree and are left untouched,
+# config, zerotier-nx config) are not in this tree and are left untouched,
 # except config.ini.example which never overwrites a real config.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,19 +19,19 @@ fetch "https://github.com/Atmosphere-NX/Atmosphere/releases/download/1.12.0/fuse
 fetch "https://github.com/CTCaer/hekate/releases/download/v6.5.4/$hekate_zip" "$hekate_zip"
 
 make -C "$root" nro sysmodule overlay >/dev/null
-[[ -f "$root/switch/app/wgnx-app.nro" && -f "$root/switch/overlay/wireguard-nx.ovl" ]]
-[[ -f "$root/switch/sysmodule/dist/atmosphere/contents/4200000000005747/flags/boot2.flag" ]]
+[[ -f "$root/switch/app/ztnx-app.nro" && -f "$root/switch/overlay/zerotier-nx.ovl" ]]
+[[ -f "$root/switch/sysmodule/dist/atmosphere/contents/4200000000005A54/flags/boot2.flag" ]]
 
 [[ "$sd" == "$root/dist/sd" ]] && rm -rf "$sd"
-mkdir -p "$sd/bootloader/payloads" "$sd/switch/wireguard-nx" "$sd/switch/.overlays" "$sd/config/wireguard-nx"
+mkdir -p "$sd/bootloader/payloads" "$sd/switch/zerotier-nx" "$sd/switch/.overlays" "$sd/config/zerotier-nx"
 unzip -q "$dl/$ams_zip" -d "$sd"
 unzip -q "$dl/$hekate_zip" -d "$sd"
 cp "$dl/fusee.bin" "$sd/bootloader/payloads/fusee.bin"
-cp "$root/switch/app/wgnx-app.nro" "$sd/switch/wireguard-nx/wireguard-nx.nro"
+cp "$root/switch/app/ztnx-app.nro" "$sd/switch/zerotier-nx/zerotier-nx.nro"
 mkdir -p "$sd/atmosphere/contents"
-cp -R "$root/switch/sysmodule/dist/atmosphere/contents/4200000000005747" "$sd/atmosphere/contents/"
-cp "$root/switch/overlay/wireguard-nx.ovl" "$sd/switch/.overlays/wireguard-nx.ovl"
-cp "$root/switch/sysmodule/res/config.ini.example" "$sd/config/wireguard-nx/config.ini.example"
+cp -R "$root/switch/sysmodule/dist/atmosphere/contents/4200000000005A54" "$sd/atmosphere/contents/"
+cp "$root/switch/overlay/zerotier-nx.ovl" "$sd/switch/.overlays/zerotier-nx.ovl"
+cp "$root/switch/sysmodule/res/config.ini.example" "$sd/config/zerotier-nx/config.ini.example"
 # Payloads for RCM injection / modchips, outside the SD tree.
 cp "$sd/hekate_ctcaer_6.5.4.bin" "$root/dist/payload-hekate.bin"
 cp "$dl/fusee.bin" "$root/dist/payload-fusee.bin"

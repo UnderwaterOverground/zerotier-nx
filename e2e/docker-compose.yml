@@ -1,43 +1,43 @@
 # Local WireGuard network for end-to-end tests: two stock peers (the Docker
-# VM's kernel WireGuard), an AmneziaWG peer, echo services, and the wgnx
+# VM's kernel WireGuard), an AmneziaWG peer, echo services, and the ztnx
 # client built for Linux. setup.sh generates the keys and .conf files under
 # state/.
-name: wgnx-e2e
+name: ztnx-e2e
 
 networks:
-  wgnx:
+  ztnx:
     ipam:
       config:
-        - subnet: 172.31.0.0/24
+        - subnet: 172.31.2.0/24
 
 services:
   # The server most tests talk to: wg 10.7.0.1, UDP 51820, with every
   # client from state/keys.txt as a peer.
   peer:
     build: { context: ., dockerfile: Dockerfile.peer }
-    image: wgnx-e2e-peer
+    image: ztnx-e2e-peer
     volumes:
       - ./state/wg0.conf:/etc/wireguard/wg0.conf:ro
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add: [NET_ADMIN]
     networks:
-      wgnx:
-        ipv4_address: 172.31.0.20
+      ztnx:
+        ipv4_address: 172.31.2.20
         aliases: [wg-server]
     profiles: [peer]
 
   # A second server (wg 10.7.0.9) for the several-peers test.
   peer2:
-    image: wgnx-e2e-peer
+    image: ztnx-e2e-peer
     volumes:
       - ./state/wg0-peer2.conf:/etc/wireguard/wg0.conf:ro
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add: [NET_ADMIN]
     networks:
-      wgnx:
-        ipv4_address: 172.31.0.21
+      ztnx:
+        ipv4_address: 172.31.2.21
     depends_on: [peer]
     profiles: [peer]
 
@@ -46,7 +46,7 @@ services:
   # test against it with state/awg-switch.conf.
   awg-peer:
     build: { context: ., dockerfile: Dockerfile.awg-peer }
-    image: wgnx-e2e-awg-peer
+    image: ztnx-e2e-awg-peer
     volumes:
       - ./state/awg0.conf:/etc/amnezia/amneziawg/awg0.conf:ro
       - ./state/awg1.conf:/etc/amnezia/amneziawg/awg1.conf:ro
@@ -55,8 +55,8 @@ services:
     cap_add: [NET_ADMIN]
     ports: ["51821:51820/udp", "51822:51821/udp"]
     networks:
-      wgnx:
-        ipv4_address: 172.31.0.22
+      ztnx:
+        ipv4_address: 172.31.2.22
     profiles: [peer]
 
   # HTTP (8080) and iperf3 (5201) servers inside peer's network namespace,
@@ -75,23 +75,23 @@ services:
     depends_on: [peer]
     profiles: [peer]
 
-  # wgnx-host built for Linux and run on the compose network.
-  # Build:  docker compose run --rm wgnx-build
-  # Run:    docker compose run --rm wgnx up --conf /state/client.conf ...
-  wgnx-build:
-    image: wgnx-e2e-client
+  # ztnx-host built for Linux and run on the compose network.
+  # Build:  docker compose run --rm ztnx-build
+  # Run:    docker compose run --rm ztnx up --conf /state/client.conf ...
+  ztnx-build:
+    image: ztnx-e2e-client
     build: { context: ., dockerfile: Dockerfile.client }
     working_dir: /src
     volumes:
       - ..:/src
-      - wgnx-cargo:/usr/local/cargo/registry
+      - ztnx-cargo:/usr/local/cargo/registry
     environment:
       CARGO_TARGET_DIR: /src/target/linux
     entrypoint: ["/src/e2e/build-linux.sh"]
-    profiles: [wgnx]
+    profiles: [ztnx]
 
-  wgnx:
-    image: wgnx-e2e-client
+  ztnx:
+    image: ztnx-e2e-client
     build: { context: ., dockerfile: Dockerfile.client }
     working_dir: /src
     volumes:
@@ -99,12 +99,12 @@ services:
       - ./state:/state
     environment:
       RUST_LOG: ${RUST_LOG:-info}
-    entrypoint: ["/src/target/linux/bin/wgnx-host"]
+    entrypoint: ["/src/target/linux/bin/ztnx-host"]
     cap_add: [NET_ADMIN]
     networks:
-      wgnx:
-        ipv4_address: 172.31.0.30
-    profiles: [wgnx]
+      ztnx:
+        ipv4_address: 172.31.2.30
+    profiles: [ztnx]
 
 volumes:
-  wgnx-cargo:
+  ztnx-cargo:

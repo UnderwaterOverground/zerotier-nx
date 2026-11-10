@@ -2,7 +2,7 @@
 """Attributes .text/.rodata/.data/.bss bytes in a GNU ld map file to the
 archive (or object) they came from, to see what the sysmodule is made of.
 
-  tools/map-sizes.py switch/sysmodule/wireguard-nx.map [--objects]
+  tools/map-sizes.py switch/sysmodule/zerotier-nx.map [--objects]
 """
 import re, sys, collections
 
@@ -51,7 +51,7 @@ for line in open(path, errors="replace"):
         a = re.match(r'(.*/)?([^/(]+)\((.*)\)$', src)
         key = a.group(2) if a else src.split("/")[-1]
         # Rust staticlib members: crate name from the codegen unit name.
-        if a and a.group(2).startswith("libwgnx_ffi"):
+        if a and a.group(2).startswith("libztnx_ffi"):
             member = a.group(3)
             key = "rust:" + re.sub(r'(-[0-9a-f]{16})?\..*$', '', member).split("-")[0]
     sizes[key][kind] += size

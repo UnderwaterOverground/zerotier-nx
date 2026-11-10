@@ -13,6 +13,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Unit tests
-        run: cargo test -p wgnx-core
+        run: cargo test -p ztnx-core
       - name: Unit tests with the Switch's buffer limits
-        run: cargo test -p wgnx-core --features switch-limits
+        run: cargo test -p ztnx-core --features switch-limits

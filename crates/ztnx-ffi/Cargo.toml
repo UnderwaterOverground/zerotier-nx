@@ -1,6 +1,6 @@
 [package]
-name = "wgnx-ffi"
-description = "C ABI over wgnx-core, linked into the Switch app/sysmodule and host shims"
+name = "ztnx-ffi"
+description = "C ABI over ztnx-core, linked into the Switch app/sysmodule and host shims"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
@@ -11,15 +11,15 @@ crate-type = ["staticlib"]
 # On Horizon the crate is no_std and gets its allocator and panic hook from the
 # C side (src/platform.rs); elsewhere it links std.
 [dependencies]
-wgnx-core.workspace = true
+ztnx-core.workspace = true
 log.workspace = true
 
-# The app and sysmodule log at Info at most (wgnx_set_log_callback(.., 3)):
+# The app and sysmodule log at Info at most (ztnx_set_log_callback(.., 3)):
 # leave out every debug and trace call, here and in the crates beneath, at
-# compile time. Hosts keep them (WGNX_LOG_LEVEL).
+# compile time. Hosts keep them (ZTNX_LOG_LEVEL).
 [target.'cfg(target_os = "horizon")'.dependencies]
 log = { workspace = true, features = ["max_level_info"] }
 
 [features]
 # Use the Switch's overlay buffer limits on hosts (memory tests).
-switch-limits = ["wgnx-core/switch-limits"]
+switch-limits = ["ztnx-core/switch-limits"]

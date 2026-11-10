@@ -1,4 +1,4 @@
-// Sysmodule log: sdmc:/config/wireguard-nx/sysmodule.log plus the optional
+// Sysmodule log: sdmc:/config/zerotier-nx/sysmodule.log plus the optional
 // UDP log target (log_udp in config.ini). Never fails, safe from any thread.
 #pragma once
 

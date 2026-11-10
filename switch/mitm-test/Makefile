@@ -43,9 +43,9 @@ SOURCES		:=	source
 DATA		:=	data
 INCLUDES	:=	include ../../native/interpose
 #ROMFS	:=	romfs
-APP_TITLE	:=	wireguard-nx MITM test
+APP_TITLE	:=	zerotier-nx MITM test
 APP_AUTHOR	:=	UnderwaterOverground
-APP_VERSION	:=	1.2.0
+APP_VERSION	:=	0.1.0
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -55,7 +55,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DWGNX_BUILD_UNIX=$(WGNX_BUILD_UNIX)
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX)
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 
@@ -209,7 +209,7 @@ $(OUTPUT).nso	:	$(OUTPUT).elf
 
 endif
 
-$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libwgnx_ffi.a
+$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libztnx_ffi.a
 
 $(OFILES_SRC)	: $(HFILES_BIN)
 

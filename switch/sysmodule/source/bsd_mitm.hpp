@@ -1,12 +1,12 @@
 // bsd:u MITM: homebrew sockets that talk to tunnel addresses (our own and
-// the peers' AllowedIPs, see VSock::IsTunnel) are served by the wgnx engine's
+// the peers' AllowedIPs, see VSock::IsTunnel) are served by the ztnx engine's
 // overlay sockets via the portable socket-virtualization layer (native/vsock);
 // everything else is forwarded to the real bsd:u untouched.
 #pragma once
 
 #include <stratosphere.hpp>
 
-namespace wgnx {
+namespace ztnx {
     class Runtime;
 }
 
@@ -33,7 +33,7 @@ namespace ams::bsd_mitm {
     // Nintendo's 01... range, so this is for forwarders inside it. Only
     // with the homebrew scope (mitm=off means no MITM at all); malformed
     // entries are logged and skipped.
-    bool Start(::wgnx::Runtime &rt, Scope scope, bool sys_ftpd, const char *titles);
+    bool Start(::ztnx::Runtime &rt, Scope scope, bool sys_ftpd, const char *titles);
 
     // Cores for the engine loop and the threads serving homebrew's socket
     // calls: core 2 first. Core 3, where sysmodules run, also runs the
@@ -51,7 +51,7 @@ namespace ams::bsd_mitm {
     // too when sys-ftpd is served. Best effort, for the crash handler.
     void UninstallForExit();
 
-    // ---- a deliberate stop (wgnx:ctl Stop) ----------------------------------
+    // ---- a deliberate stop (ztnx:ctl Stop) ----------------------------------
 
     enum class StopCheck {
         Ok,        // no client sessions; new ones bypass us until CancelStop

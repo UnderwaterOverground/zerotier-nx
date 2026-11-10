@@ -3,13 +3,13 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use wgnx_core::engine::Engine;
-use wgnx_core::netstack::{NetError, SockId};
-use wgnx_core::time::Instant;
+use ztnx_core::engine::Engine;
+use ztnx_core::netstack::{NetError, SockId};
+use ztnx_core::time::Instant;
 
 use crate::driver::Clock;
 
-const PAYLOAD: &[u8] = b"wireguard-nx echo test";
+const PAYLOAD: &[u8] = b"zerotier-nx echo test";
 const TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct EchoTest {

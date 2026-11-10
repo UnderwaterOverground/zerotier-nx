@@ -5,9 +5,9 @@
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH};
 
-use wgnx_core::config::WgConfig;
-use wgnx_core::engine::{Engine, Event, Io};
-use wgnx_core::time::Instant;
+use ztnx_core::config::WgConfig;
+use ztnx_core::engine::{Engine, Event, Io};
+use ztnx_core::time::Instant;
 
 pub struct Clock(StdInstant);
 

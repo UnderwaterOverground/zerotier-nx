@@ -1,4 +1,4 @@
-// wireguard-nx MITM test: runs the socket-virtualization suite
+// zerotier-nx MITM test: runs the socket-virtualization suite
 // (native/interpose/vsock_test.c) as ordinary homebrew, so its plain BSD
 // socket calls go through the sysmodule's bsd:u MITM. Output goes to nxlink.
 //
@@ -15,7 +15,7 @@
 int main(int argc, char **argv) {
     socketInitializeDefault();
     nxlinkStdio();
-    printf("wireguard-nx MITM test\n");
+    printf("zerotier-nx MITM test\n");
     int rc = 2;
     if (argc >= 2) {
         rc = vsock_test_main(argc, argv);

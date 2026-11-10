@@ -9,7 +9,7 @@
 #include <cstring>
 #include <vector>
 
-namespace wgnx {
+namespace ztnx {
 
 namespace {
 
@@ -18,7 +18,7 @@ constexpr int kConnectTimeoutMs = 75000;
 // Slice for polls that mix real and virtual sockets.
 constexpr int kMixedPollSliceMs = 5;
 
-bool ToAddr(const sockaddr *sa, WgnxAddr *out) {
+bool ToAddr(const sockaddr *sa, ZtnxAddr *out) {
     std::memset(out, 0, sizeof *out);
     if (sa->sa_family == AF_INET) {
         auto *in = reinterpret_cast<const sockaddr_in *>(sa);
@@ -37,8 +37,8 @@ bool ToAddr(const sockaddr *sa, WgnxAddr *out) {
     return false;
 }
 
-// Writes a WgnxAddr as a sockaddr (in the caller's family where possible).
-void FromAddr(const WgnxAddr &a, sockaddr *sa, socklen_t *len) {
+// Writes a ZtnxAddr as a sockaddr (in the caller's family where possible).
+void FromAddr(const ZtnxAddr &a, sockaddr *sa, socklen_t *len) {
     if (!sa || !len) return;
     if (a.family == 4) {
         sockaddr_in in{};
@@ -88,7 +88,7 @@ Runtime::Clock::time_point DeadlineFrom(int timeout_ms) {
 namespace {
 
 std::mutex g_routes_mu;
-WgnxPrefix g_routes[VSock::MaxRoutes];
+ZtnxPrefix g_routes[VSock::MaxRoutes];
 size_t g_num_routes = 0;
 uint32_t g_local_ipv4 = 0;
 unsigned g_local_len = 32;
@@ -117,7 +117,7 @@ bool PrefixMatch(const uint8_t *a, const uint8_t *b, unsigned len) {
 
 }  // namespace
 
-void VSock::SetRoutes(const WgnxPrefix *routes, size_t n) {
+void VSock::SetRoutes(const ZtnxPrefix *routes, size_t n) {
     std::lock_guard<std::mutex> lock(g_routes_mu);
     g_num_routes = std::min(n, MaxRoutes);
     if (g_num_routes) std::memcpy(g_routes, routes, g_num_routes * sizeof *routes);
@@ -170,7 +170,7 @@ bool VSock::ToAlias(uint32_t *ip) {
     return false;
 }
 
-void VSock::Unalias(WgnxAddr *a, VFd &v) {
+void VSock::Unalias(ZtnxAddr *a, VFd &v) {
     if (a->family != 4) return;
     uint32_t ip;
     std::memcpy(&ip, a->ip, 4);
@@ -181,7 +181,7 @@ void VSock::Unalias(WgnxAddr *a, VFd &v) {
     v.aliased = true;
 }
 
-void VSock::Realias(WgnxAddr *a, const VFd &v) {
+void VSock::Realias(ZtnxAddr *a, const VFd &v) {
     if (!v.aliased || a->family != 4) return;
     uint32_t ip;
     std::memcpy(&ip, a->ip, 4);
@@ -227,7 +227,7 @@ bool VSock::IsTunnel(const sockaddr *addr) {
         if (PrefixMatch(ip, local, g_local_len)) return false;  // on our LAN: direct
     }
     for (size_t i = 0; i < g_num_routes; i++) {
-        const WgnxPrefix &r = g_routes[i];
+        const ZtnxPrefix &r = g_routes[i];
         if (r.family == family && r.len <= (family == 4 ? 32 : 128) && PrefixMatch(ip, r.ip, r.len)) return true;
     }
     return false;
@@ -258,25 +258,25 @@ bool VSock::IsVirtual(int fd) {
 
 Result VSock::EngineErr(int32_t code) {
     switch (code) {
-        case WGNX_EAGAIN: return Fail(Err::Again);
-        case WGNX_ENOTCONN: return Fail(Err::NotConn);
-        case WGNX_EBADF: return Fail(Err::BadF);
-        case WGNX_EADDRINUSE: return Fail(Err::AddrInUse);
-        case WGNX_ECONNREFUSED: return Fail(Err::ConnRefused);
-        case WGNX_ECONNRESET: return Fail(Err::ConnReset);
-        case WGNX_ENOBUFS: return Fail(Err::NoBufs);
+        case ZTNX_EAGAIN: return Fail(Err::Again);
+        case ZTNX_ENOTCONN: return Fail(Err::NotConn);
+        case ZTNX_EBADF: return Fail(Err::BadF);
+        case ZTNX_EADDRINUSE: return Fail(Err::AddrInUse);
+        case ZTNX_ECONNREFUSED: return Fail(Err::ConnRefused);
+        case ZTNX_ECONNRESET: return Fail(Err::ConnReset);
+        case ZTNX_ENOBUFS: return Fail(Err::NoBufs);
         default: return Fail(Err::Inval);
     }
 }
 
 bool VSock::WaitEngine(int32_t id, uint32_t mask, int timeout_ms) {
-    auto ready = [&](WgnxEngine *e) { return (wgnx_net_readiness(e, id) & mask) != 0; };
+    auto ready = [&](ZtnxEngine *e) { return (ztnx_net_readiness(e, id) & mask) != 0; };
     if (timeout_ms < 0) return WaitSliced(ready, nullptr);
     auto deadline = DeadlineFrom(timeout_ms);
     return WaitSliced(ready, &deadline);
 }
 
-bool VSock::WaitSliced(const std::function<bool(WgnxEngine *)> &ready, const Runtime::Clock::time_point *deadline) {
+bool VSock::WaitSliced(const std::function<bool(ZtnxEngine *)> &ready, const Runtime::Clock::time_point *deadline) {
     if (!alive_) return rt_.WaitFor(ready, deadline);
     for (;;) {
         auto slice = Runtime::Clock::now() + std::chrono::seconds(1);
@@ -292,11 +292,11 @@ void VSock::CloseAll() {
         std::lock_guard<std::mutex> lock(mu_);
         all.swap(fds_);
     }
-    rt_.With([&](WgnxEngine *e) {
+    rt_.With([&](ZtnxEngine *e) {
         for (auto &[fd, v] : all) {
-            if (v.tcp) wgnx_net_close(e, v.tcp);
-            if (v.listen) wgnx_net_close(e, v.listen);
-            if (v.udp) wgnx_net_close(e, v.udp);
+            if (v.tcp) ztnx_net_close(e, v.tcp);
+            if (v.listen) ztnx_net_close(e, v.listen);
+            if (v.udp) ztnx_net_close(e, v.udp);
         }
     });
     rt_.NotifyAll();
@@ -319,7 +319,7 @@ bool VSock::EnsureUdp(int fd, VFd &v) {
             v.port = PortOf(reinterpret_cast<sockaddr *>(&ss));
         v.bound_any = true;
     }
-    int32_t id = rt_.With([&](WgnxEngine *e) { return wgnx_net_udp_bind(e, v.port); });
+    int32_t id = rt_.With([&](ZtnxEngine *e) { return ztnx_net_udp_bind(e, v.port); });
     if (id <= 0) return false;
     v.udp = id;
     Put(fd, v);
@@ -354,10 +354,10 @@ Result VSock::Close(int fd) {
             fds_.erase(fd);
         }
         if (v.tcp || v.listen || v.udp) {
-            rt_.With([&](WgnxEngine *e) {
-                if (v.tcp) wgnx_net_close(e, v.tcp);
-                if (v.listen) wgnx_net_close(e, v.listen);
-                if (v.udp) wgnx_net_close(e, v.udp);
+            rt_.With([&](ZtnxEngine *e) {
+                if (v.tcp) ztnx_net_close(e, v.tcp);
+                if (v.listen) ztnx_net_close(e, v.listen);
+                if (v.udp) ztnx_net_close(e, v.udp);
             });
             rt_.NotifyAll();
         }
@@ -374,7 +374,7 @@ Result VSock::Connect(int fd, const sockaddr *addr, socklen_t len) {
         }
         return real_.Connect(fd, addr, len);
     }
-    WgnxAddr dst;
+    ZtnxAddr dst;
     ToAddr(addr, &dst);
     Unalias(&dst, v);
     if (v.type == SOCK_DGRAM) {
@@ -385,7 +385,7 @@ Result VSock::Connect(int fd, const sockaddr *addr, socklen_t len) {
         return Result::Ok(0);
     }
     if (v.tcp) return Fail(v.connecting ? Err::InProgress : Err::IsConn);
-    int32_t id = rt_.With([&](WgnxEngine *e) { return wgnx_net_tcp_connect(e, &dst); });
+    int32_t id = rt_.With([&](ZtnxEngine *e) { return ztnx_net_tcp_connect(e, &dst); });
     if (id <= 0) return EngineErr(id);
     v.tcp = id;
     v.virtual_only = true;
@@ -394,10 +394,10 @@ Result VSock::Connect(int fd, const sockaddr *addr, socklen_t len) {
     if (v.nonblock) return Fail(Err::InProgress);
 
     int timeout = v.snd_timeout_ms > 0 ? v.snd_timeout_ms : kConnectTimeoutMs;
-    bool ok = WaitEngine(id, WGNX_WRITABLE | WGNX_HUP, timeout);
-    uint32_t r = rt_.With([&](WgnxEngine *e) { return wgnx_net_readiness(e, id); });
+    bool ok = WaitEngine(id, ZTNX_WRITABLE | ZTNX_HUP, timeout);
+    uint32_t r = rt_.With([&](ZtnxEngine *e) { return ztnx_net_readiness(e, id); });
     v.connecting = false;
-    if (ok && (r & WGNX_WRITABLE)) {
+    if (ok && (r & ZTNX_WRITABLE)) {
         v.connected_virtual = true;
         Put(fd, v);
         return Result::Ok(0);
@@ -464,9 +464,9 @@ Result VSock::Listen(int fd, int backlog) {
         Result r = real_.Listen(fd, backlog);
         if (r.ret < 0) return r;
     }
-    int32_t id = rt_.With([&](WgnxEngine *e) { return wgnx_net_tcp_listen(e, v.port, backlog > 0 ? backlog : 8); });
+    int32_t id = rt_.With([&](ZtnxEngine *e) { return ztnx_net_tcp_listen(e, v.port, backlog > 0 ? backlog : 8); });
     // Dual sockets still listen on the real side if the overlay can't.
-    if (id <= 0 && v.virtual_only) return Fail(id == WGNX_ENOBUFS ? Err::NoBufs : Err::AddrInUse);
+    if (id <= 0 && v.virtual_only) return Fail(id == ZTNX_ENOBUFS ? Err::NoBufs : Err::AddrInUse);
     if (id > 0) v.listen = id;
     Put(fd, v);
     return Result::Ok(0);
@@ -476,13 +476,13 @@ Result VSock::Accept(int fd, sockaddr *addr, socklen_t *len) {
     VFd v;
     if (!Get(fd, &v) || !v.listen) return real_.Accept(fd, addr, len);
     for (;;) {
-        WgnxAddr peer{};
-        int32_t conn = rt_.With([&](WgnxEngine *e) { return wgnx_net_tcp_accept(e, v.listen, &peer); });
+        ZtnxAddr peer{};
+        int32_t conn = rt_.With([&](ZtnxEngine *e) { return ztnx_net_tcp_accept(e, v.listen, &peer); });
         if (conn > 0) {
             // A real placeholder socket gives the connection an fd number.
             Result s = real_.Socket(v.domain, SOCK_STREAM, 0);
             if (s.ret < 0) {
-                rt_.With([&](WgnxEngine *e) { wgnx_net_close(e, conn); });
+                rt_.With([&](ZtnxEngine *e) { ztnx_net_close(e, conn); });
                 return s;
             }
             VFd c;
@@ -502,7 +502,7 @@ Result VSock::Accept(int fd, sockaddr *addr, socklen_t *len) {
         }
         if (v.nonblock) return Fail(Err::Again);
         if (v.virtual_only) {
-            if (!WaitEngine(v.listen, WGNX_READABLE, -1)) return Fail(Err::Again);
+            if (!WaitEngine(v.listen, ZTNX_READABLE, -1)) return Fail(Err::Again);
         } else {
             pollfd p{fd, POLLIN, 0};
             real_.Poll(&p, 1, kMixedPollSliceMs);
@@ -518,12 +518,12 @@ Result VSock::Send(int fd, const void *buf, size_t len, int flags) {
     bool dontwait = v.nonblock || (flags & real_.DontWaitFlag());
     int timeout = v.snd_timeout_ms;
     for (;;) {
-        int32_t n = rt_.With([&](WgnxEngine *e) {
-            return wgnx_net_send(e, v.tcp, static_cast<const uint8_t *>(buf), len);
+        int32_t n = rt_.With([&](ZtnxEngine *e) {
+            return ztnx_net_send(e, v.tcp, static_cast<const uint8_t *>(buf), len);
         });
         if (n >= 0) return Result::Ok(n);
-        if (n != WGNX_EAGAIN || dontwait) return n == WGNX_ENOTCONN ? Fail(Err::Pipe) : EngineErr(n);
-        if (!WaitEngine(v.tcp, WGNX_WRITABLE | WGNX_HUP, timeout)) return Fail(Err::Again);
+        if (n != ZTNX_EAGAIN || dontwait) return n == ZTNX_ENOTCONN ? Fail(Err::Pipe) : EngineErr(n);
+        if (!WaitEngine(v.tcp, ZTNX_WRITABLE | ZTNX_HUP, timeout)) return Fail(Err::Again);
     }
 }
 
@@ -534,7 +534,7 @@ Result VSock::SendTo(int fd, const void *buf, size_t len, int flags, const socka
         if (known && v.tcp) return Send(fd, buf, len, flags);
         return real_.SendTo(fd, buf, len, flags, to, tolen);
     }
-    WgnxAddr dst;
+    ZtnxAddr dst;
     if (to) {
         if (!IsTunnel(to)) {
             v.real_used = true;
@@ -551,8 +551,8 @@ Result VSock::SendTo(int fd, const void *buf, size_t len, int flags, const socka
         return real_.SendTo(fd, buf, len, flags, to, tolen);
     }
     if (!EnsureUdp(fd, v)) return Fail(Err::Inval);
-    int32_t n = rt_.With([&](WgnxEngine *e) {
-        return wgnx_net_udp_sendto(e, v.udp, static_cast<const uint8_t *>(buf), len, &dst);
+    int32_t n = rt_.With([&](ZtnxEngine *e) {
+        return ztnx_net_udp_sendto(e, v.udp, static_cast<const uint8_t *>(buf), len, &dst);
     });
     return n >= 0 ? Result::Ok(n) : EngineErr(n);
 }
@@ -563,10 +563,10 @@ Result VSock::Recv(int fd, void *buf, size_t len, int flags) {
     if (v.type == SOCK_DGRAM) return RecvFrom(fd, buf, len, flags, nullptr, nullptr);
     bool dontwait = v.nonblock || (flags & real_.DontWaitFlag());
     for (;;) {
-        int32_t n = rt_.With([&](WgnxEngine *e) { return wgnx_net_recv(e, v.tcp, static_cast<uint8_t *>(buf), len); });
+        int32_t n = rt_.With([&](ZtnxEngine *e) { return ztnx_net_recv(e, v.tcp, static_cast<uint8_t *>(buf), len); });
         if (n >= 0) return Result::Ok(n);
-        if (n != WGNX_EAGAIN || dontwait) return EngineErr(n);
-        if (!WaitEngine(v.tcp, WGNX_READABLE | WGNX_HUP, v.rcv_timeout_ms)) return Fail(Err::Again);
+        if (n != ZTNX_EAGAIN || dontwait) return EngineErr(n);
+        if (!WaitEngine(v.tcp, ZTNX_READABLE | ZTNX_HUP, v.rcv_timeout_ms)) return Fail(Err::Again);
     }
 }
 
@@ -583,9 +583,9 @@ Result VSock::RecvFrom(int fd, void *buf, size_t len, int flags, sockaddr *from,
     bool dontwait = v.nonblock || (flags & real_.DontWaitFlag());
     auto deadline = DeadlineFrom(v.rcv_timeout_ms >= 0 ? v.rcv_timeout_ms : 0);
     for (;;) {
-        WgnxAddr src{};
-        int32_t n = rt_.Read([&](WgnxEngine *e) {
-            return wgnx_net_udp_recvfrom(e, v.udp, static_cast<uint8_t *>(buf), len, &src);
+        ZtnxAddr src{};
+        int32_t n = rt_.Read([&](ZtnxEngine *e) {
+            return ztnx_net_udp_recvfrom(e, v.udp, static_cast<uint8_t *>(buf), len, &src);
         });
         if (n >= 0) {
             Realias(&src, v);
@@ -612,19 +612,19 @@ Result VSock::RecvFrom(int fd, void *buf, size_t len, int flags, sockaddr *from,
 
 // Readiness of a socket's virtual side as poll() revents. Caller holds the
 // runtime lock (passes the engine).
-static uint32_t EngineRevents(WgnxEngine *e, int32_t tcp, int32_t listen, int32_t udp, bool connecting, short events) {
+static uint32_t EngineRevents(ZtnxEngine *e, int32_t tcp, int32_t listen, int32_t udp, bool connecting, short events) {
     uint32_t out = 0;
     auto check = [&](int32_t id) {
-        uint32_t r = wgnx_net_readiness(e, id);
-        if ((events & POLLIN) && (r & WGNX_READABLE)) out |= POLLIN;
-        if ((events & POLLOUT) && (r & WGNX_WRITABLE)) out |= POLLOUT;
-        if (r & WGNX_HUP) out |= POLLHUP;
+        uint32_t r = ztnx_net_readiness(e, id);
+        if ((events & POLLIN) && (r & ZTNX_READABLE)) out |= POLLIN;
+        if ((events & POLLOUT) && (r & ZTNX_WRITABLE)) out |= POLLOUT;
+        if (r & ZTNX_HUP) out |= POLLHUP;
     };
     if (tcp) check(tcp);
     if (listen) check(listen);
     if (udp) {
-        uint32_t r = wgnx_net_readiness(e, udp);
-        if ((events & POLLIN) && (r & WGNX_READABLE)) out |= POLLIN;
+        uint32_t r = ztnx_net_readiness(e, udp);
+        if ((events & POLLIN) && (r & ZTNX_READABLE)) out |= POLLIN;
         if (events & POLLOUT) out |= POLLOUT;  // datagrams: always writable
     }
     // A TCP connect that failed reports error+hup, like the kernel.
@@ -654,7 +654,7 @@ Result VSock::Poll(pollfd *fds, nfds_t n, int timeout_ms) {
     std::vector<pollfd> realfds(fds, fds + n);
     for (;;) {
         int ready = 0;
-        rt_.Read([&](WgnxEngine *e) {
+        rt_.Read([&](ZtnxEngine *e) {
             for (nfds_t i = 0; i < n; i++) {
                 const VFd &v = state[i];
                 fds[i].revents = virt[i] ? static_cast<short>(EngineRevents(e, v.tcp, v.listen, v.udp, v.connecting, fds[i].events)) : 0;
@@ -685,7 +685,7 @@ Result VSock::Poll(pollfd *fds, nfds_t n, int timeout_ms) {
         if (timeout_ms == 0 || (timeout_ms > 0 && Runtime::Clock::now() >= deadline)) return Result::Ok(0);
         if (!any_real) {
             // Pure overlay: sleep until one of the sockets becomes ready.
-            auto any_ready_fn = [&](WgnxEngine *e) {
+            auto any_ready_fn = [&](ZtnxEngine *e) {
                 for (nfds_t i = 0; i < n; i++) {
                     const VFd &v = state[i];
                     if (virt[i] && EngineRevents(e, v.tcp, v.listen, v.udp, v.connecting, fds[i].events)) return true;
@@ -701,7 +701,7 @@ Result VSock::Poll(pollfd *fds, nfds_t n, int timeout_ms) {
 Result VSock::Shutdown(int fd, int how) {
     VFd v;
     if (!Get(fd, &v) || !v.tcp) return real_.Shutdown(fd, how);
-    if (how == SHUT_WR || how == SHUT_RDWR) rt_.With([&](WgnxEngine *e) { wgnx_net_shutdown(e, v.tcp); });
+    if (how == SHUT_WR || how == SHUT_RDWR) rt_.With([&](ZtnxEngine *e) { ztnx_net_shutdown(e, v.tcp); });
     return Result::Ok(0);
 }
 
@@ -710,8 +710,8 @@ Result VSock::GetSockName(int fd, sockaddr *addr, socklen_t *len) {
     if (!Get(fd, &v) || !(v.tcp || v.virtual_only)) return real_.GetSockName(fd, addr, len);
     // The overlay side: our tunnel address and the overlay port.
     int32_t id = v.tcp ? v.tcp : (v.udp ? v.udp : v.listen);
-    WgnxAddr a{};
-    if (rt_.With([&](WgnxEngine *e) { return wgnx_net_local_addr(e, id, &a); }) != 0) return Fail(Err::Inval);
+    ZtnxAddr a{};
+    if (rt_.With([&](ZtnxEngine *e) { return ztnx_net_local_addr(e, id, &a); }) != 0) return Fail(Err::Inval);
     FromAddr(a, addr, len);
     return Result::Ok(0);
 }
@@ -720,14 +720,14 @@ Result VSock::GetPeerName(int fd, sockaddr *addr, socklen_t *len) {
     VFd v;
     if (!Get(fd, &v) || (!v.tcp && !v.has_udp_peer)) return real_.GetPeerName(fd, addr, len);
     if (v.has_udp_peer) {
-        WgnxAddr a = v.udp_peer;
+        ZtnxAddr a = v.udp_peer;
         Realias(&a, v);
         FromAddr(a, addr, len);
         return Result::Ok(0);
     }
     if (!v.tcp) return Fail(Err::NotConn);
-    WgnxAddr a{};
-    if (rt_.With([&](WgnxEngine *e) { return wgnx_net_peer_addr(e, v.tcp, &a); }) != 0) return Fail(Err::NotConn);
+    ZtnxAddr a{};
+    if (rt_.With([&](ZtnxEngine *e) { return ztnx_net_peer_addr(e, v.tcp, &a); }) != 0) return Fail(Err::NotConn);
     Realias(&a, v);
     FromAddr(a, addr, len);
     return Result::Ok(0);
@@ -739,12 +739,12 @@ Result VSock::GetSockOpt(int fd, int level, int name, void *val, socklen_t *len)
         // Completion status of a non-blocking virtual connect.
         int err = 0;
         if (v.connecting) {
-            uint32_t r = rt_.With([&](WgnxEngine *e) { return wgnx_net_readiness(e, v.tcp); });
-            if (r & WGNX_WRITABLE) {
+            uint32_t r = rt_.With([&](ZtnxEngine *e) { return ztnx_net_readiness(e, v.tcp); });
+            if (r & ZTNX_WRITABLE) {
                 v.connecting = false;
                 v.connected_virtual = true;
                 Put(fd, v);
-            } else if (r & WGNX_HUP) {
+            } else if (r & ZTNX_HUP) {
                 v.connecting = false;
                 Put(fd, v);
                 err = real_.Errno(Err::ConnRefused);
@@ -794,4 +794,4 @@ void VSock::NoteNonBlocking(int fd, bool on) {
     }
 }
 
-}  // namespace wgnx
+}  // namespace ztnx

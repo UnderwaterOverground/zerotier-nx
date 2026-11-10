@@ -11,7 +11,7 @@ extern "C" {
     fn free(ptr: *mut c_void);
 
     /// Provided by the embedding program. Must not return.
-    fn wgnx_platform_panic(msg: *const u8, len: usize) -> !;
+    fn ztnx_platform_panic(msg: *const u8, len: usize) -> !;
 }
 
 // newlib's malloc returns 16-byte aligned blocks on AArch64.
@@ -83,5 +83,5 @@ impl Write for PanicBuf {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     let mut out = PanicBuf { buf: [0; 256], len: 0 };
     let _ = write!(out, "{info}");
-    unsafe { wgnx_platform_panic(out.buf.as_ptr(), out.len) }
+    unsafe { ztnx_platform_panic(out.buf.as_ptr(), out.len) }
 }

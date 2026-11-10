@@ -127,12 +127,12 @@ static int session(const char *ip, int round) {
 
 int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "usage: heap-probe <peer-ip>\n"); return 2; }
-    // The first socket() starts the engine (WGNX_WAIT_READY waits for peers).
+    // The first socket() starts the engine (ZTNX_WAIT_READY waits for peers).
     int warm = socket(AF_INET, SOCK_DGRAM, 0);
     close(warm);
-    heap_stats = (void (*)(size_t *, size_t *))dlsym(RTLD_DEFAULT, "wgnx_heap_stats");
-    heap_classes = (size_t (*)(char *, size_t))dlsym(RTLD_DEFAULT, "wgnx_heap_classes");
-    if (!heap_stats) { fprintf(stderr, "wgnx_heap_stats not found (run under the shim)\n"); return 2; }
+    heap_stats = (void (*)(size_t *, size_t *))dlsym(RTLD_DEFAULT, "ztnx_heap_stats");
+    heap_classes = (size_t (*)(char *, size_t))dlsym(RTLD_DEFAULT, "ztnx_heap_classes");
+    if (!heap_stats) { fprintf(stderr, "ztnx_heap_stats not found (run under the shim)\n"); return 2; }
     usleep(3000 * 1000);
     report("idle baseline");
     for (int round = 1; round <= 2; round++)

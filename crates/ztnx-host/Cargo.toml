@@ -1,12 +1,12 @@
 [package]
-name = "wgnx-host"
-description = "Host (macOS/Linux) driver for wgnx-core"
+name = "ztnx-host"
+description = "Host (macOS/Linux) driver for ztnx-core"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
-wgnx-core = { workspace = true, features = ["std"] }
+ztnx-core = { workspace = true, features = ["std"] }
 log = "0.4"
 base64.workspace = true
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime"] }

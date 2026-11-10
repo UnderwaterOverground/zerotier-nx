@@ -17,26 +17,26 @@ grep -q "\"version\": \"$version\"" switch/sysmodule/res/app.json || { echo "app
 # the checks below: Docker on macOS can show the build a stale view of files
 # changed on the host (timestamps, deleted files).
 in_docker() { docker run --rm -v "$root:/src" -w /src alpine sh -c "$1"; }
-in_docker 'rm -f switch/overlay/build/main.o switch/overlay/wireguard-nx.nacp switch/overlay/wireguard-nx.ovl'
+in_docker 'rm -f switch/overlay/build/main.o switch/overlay/zerotier-nx.nacp switch/overlay/zerotier-nx.ovl'
 make sysmodule overlay >/dev/null
-in_docker "grep -a -q 'wireguard-nx $version' switch/overlay/wireguard-nx.elf" || { echo "overlay doesn't say $version"; exit 1; }
+in_docker "grep -a -q 'zerotier-nx $version' switch/overlay/zerotier-nx.elf" || { echo "overlay doesn't say $version"; exit 1; }
 # The NACP holds the name, author and version Ultrahand shows.
-nacp_has() { in_docker "tr '\\000' '\\n' < switch/overlay/wireguard-nx.nacp | grep -q -F '$1'"; }
-in_docker "[ \$(wc -c < switch/overlay/wireguard-nx.nacp) -eq 16384 ]" && nacp_has "$version" && nacp_has UnderwaterOverground ||
-  { echo "switch/overlay/wireguard-nx.nacp is stale or malformed"; exit 1; }
-contents=switch/sysmodule/dist/atmosphere/contents/4200000000005747
-for f in "$contents/exefs.nsp" "$contents/toolbox.json" "$contents/flags/boot2.flag" switch/overlay/wireguard-nx.ovl; do
+nacp_has() { in_docker "tr '\\000' '\\n' < switch/overlay/zerotier-nx.nacp | grep -q -F '$1'"; }
+in_docker "[ \$(wc -c < switch/overlay/zerotier-nx.nacp) -eq 16384 ]" && nacp_has "$version" && nacp_has UnderwaterOverground ||
+  { echo "switch/overlay/zerotier-nx.nacp is stale or malformed"; exit 1; }
+contents=switch/sysmodule/dist/atmosphere/contents/4200000000005A54
+for f in "$contents/exefs.nsp" "$contents/toolbox.json" "$contents/flags/boot2.flag" switch/overlay/zerotier-nx.ovl; do
   [[ -f "$f" ]] || { echo "missing $f"; exit 1; }
 done
 
-stage="dist/release/wireguard-nx-$version"
+stage="dist/release/zerotier-nx-$version"
 rm -rf "$stage"
-mkdir -p "$stage/atmosphere/contents" "$stage/switch/.overlays" "$stage/config/wireguard-nx"
+mkdir -p "$stage/atmosphere/contents" "$stage/switch/.overlays" "$stage/config/zerotier-nx"
 cp -R "$contents" "$stage/atmosphere/contents/"
-cp switch/overlay/wireguard-nx.ovl "$stage/switch/.overlays/"
-cp switch/sysmodule/res/config.ini.example "$stage/config/wireguard-nx/"
+cp switch/overlay/zerotier-nx.ovl "$stage/switch/.overlays/"
+cp switch/sysmodule/res/config.ini.example "$stage/config/zerotier-nx/"
 
-zip="dist/wireguard-nx-$version.zip"
+zip="dist/zerotier-nx-$version.zip"
 rm -f "$zip"
 (cd "$stage" && zip -qrX "$root/$zip" atmosphere switch config -x '.*' -x '*/.DS_Store')
 echo "built $zip"

@@ -1,5 +1,5 @@
-# wireguard-nx settings: copy to config.ini and edit. Everything is optional;
-# see the setup guide linked from the wireguard-nx README. Changes apply
+# zerotier-nx settings: copy to config.ini and edit. Everything is optional;
+# see the setup guide linked from the zerotier-nx README. Changes apply
 # after a restart (the overlay's Config page switches .conf files at once).
 #
 # The tunnel itself is a wg-quick style file next to this one, e.g. wg0.conf,

@@ -11,15 +11,15 @@ extern "C" {
 
 // Resolves `host` (or parses an IPv4 literal) to an IPv4 address in network
 // byte order. Returns 0 on success.
-typedef int (*wgnx_resolver_fn)(const char *host, uint32_t *ipv4_be);
+typedef int (*ztnx_resolver_fn)(const char *host, uint32_t *ipv4_be);
 
-void wgnx_set_resolver(wgnx_resolver_fn fn);
-int wgnx_resolve_ipv4(const char *host, uint32_t *ipv4_be);
+void ztnx_set_resolver(ztnx_resolver_fn fn);
+int ztnx_resolve_ipv4(const char *host, uint32_t *ipv4_be);
 
 // One A-record query to `server_be` (UDP 53), waiting up to timeout_ms.
 // Returns 0, or -1 with errno saying why (ETIMEDOUT, EPROTO, ENOENT, or the
 // socket call's own error).
-int wgnx_dns_query_a(uint32_t server_be, const char *host, uint32_t *ipv4_be, int timeout_ms);
+int ztnx_dns_query_a(uint32_t server_be, const char *host, uint32_t *ipv4_be, int timeout_ms);
 
 #ifdef __cplusplus
 }

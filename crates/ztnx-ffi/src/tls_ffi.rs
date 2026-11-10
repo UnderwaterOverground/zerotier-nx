@@ -6,20 +6,20 @@ use alloc::format;
 use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
 
-use wgnx_core::tls::{self, TlsClient};
+use ztnx_core::tls::{self, TlsClient};
 
-pub struct WgnxTls {
+pub struct ZtnxTls {
     client: TlsClient,
     out: Vec<u8>,
     plain: Vec<u8>,
     error: Vec<u8>,
 }
 
-pub const WGNX_TLS_ESTABLISHED: u32 = 1;
-pub const WGNX_TLS_PEER_CLOSED: u32 = 2;
-pub const WGNX_TLS_FAILED: u32 = 4;
+pub const ZTNX_TLS_ESTABLISHED: u32 = 1;
+pub const ZTNX_TLS_PEER_CLOSED: u32 = 2;
+pub const ZTNX_TLS_FAILED: u32 = 4;
 
-impl WgnxTls {
+impl ZtnxTls {
     fn fail(&mut self, e: tls::TlsError) -> i32 {
         let mut msg = format!("{e:?}").into_bytes();
         msg.push(0);
@@ -35,7 +35,7 @@ impl WgnxTls {
 
 /// Starts a TLS 1.3 session to `server_name`. Returns NULL on failure.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_new(server_name: *const c_char) -> *mut WgnxTls {
+pub unsafe extern "C" fn ztnx_tls_new(server_name: *const c_char) -> *mut ZtnxTls {
     let Ok(name) = CStr::from_ptr(server_name).to_str() else {
         return core::ptr::null_mut();
     };
@@ -44,7 +44,7 @@ pub unsafe extern "C" fn wgnx_tls_new(server_name: *const c_char) -> *mut WgnxTl
     };
     match TlsClient::new(config, name) {
         Ok(client) => {
-            let mut s = Box::new(WgnxTls { client, out: Vec::new(), plain: Vec::new(), error: Vec::new() });
+            let mut s = Box::new(ZtnxTls { client, out: Vec::new(), plain: Vec::new(), error: Vec::new() });
             s.collect();
             Box::into_raw(s)
         }
@@ -53,7 +53,7 @@ pub unsafe extern "C" fn wgnx_tls_new(server_name: *const c_char) -> *mut WgnxTl
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_free(s: *mut WgnxTls) {
+pub unsafe extern "C" fn ztnx_tls_free(s: *mut ZtnxTls) {
     if !s.is_null() {
         drop(Box::from_raw(s));
     }
@@ -61,7 +61,7 @@ pub unsafe extern "C" fn wgnx_tls_free(s: *mut WgnxTls) {
 
 /// Feeds ciphertext read from the socket. Returns 0, or -1 on a TLS error.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_feed(s: *mut WgnxTls, data: *const u8, len: usize) -> i32 {
+pub unsafe extern "C" fn ztnx_tls_feed(s: *mut ZtnxTls, data: *const u8, len: usize) -> i32 {
     let s = &mut *s;
     let r = s.client.feed(core::slice::from_raw_parts(data, len));
     s.collect();
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn wgnx_tls_feed(s: *mut WgnxTls, data: *const u8, len: us
 
 /// Queues plaintext for encryption. Returns 0, or -1 on a TLS error.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_write(s: *mut WgnxTls, data: *const u8, len: usize) -> i32 {
+pub unsafe extern "C" fn ztnx_tls_write(s: *mut ZtnxTls, data: *const u8, len: usize) -> i32 {
     let s = &mut *s;
     let r = s.client.write(core::slice::from_raw_parts(data, len));
     s.collect();
@@ -92,36 +92,36 @@ fn drain_into(src: &mut Vec<u8>, buf: *mut u8, cap: usize) -> usize {
 
 /// Copies up to `cap` bytes of pending ciphertext to send. Returns the count.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_take_outgoing(s: *mut WgnxTls, buf: *mut u8, cap: usize) -> usize {
+pub unsafe extern "C" fn ztnx_tls_take_outgoing(s: *mut ZtnxTls, buf: *mut u8, cap: usize) -> usize {
     drain_into(&mut (*s).out, buf, cap)
 }
 
 /// Copies up to `cap` bytes of decrypted plaintext. Returns the count.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_read(s: *mut WgnxTls, buf: *mut u8, cap: usize) -> usize {
+pub unsafe extern "C" fn ztnx_tls_read(s: *mut ZtnxTls, buf: *mut u8, cap: usize) -> usize {
     drain_into(&mut (*s).plain, buf, cap)
 }
 
-/// Returns a bitmask of WGNX_TLS_* flags.
+/// Returns a bitmask of ZTNX_TLS_* flags.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_state(s: *const WgnxTls) -> u32 {
+pub unsafe extern "C" fn ztnx_tls_state(s: *const ZtnxTls) -> u32 {
     let s = &*s;
     let mut flags = 0;
     if s.client.is_established() {
-        flags |= WGNX_TLS_ESTABLISHED;
+        flags |= ZTNX_TLS_ESTABLISHED;
     }
     if s.client.peer_closed() {
-        flags |= WGNX_TLS_PEER_CLOSED;
+        flags |= ZTNX_TLS_PEER_CLOSED;
     }
     if !s.error.is_empty() {
-        flags |= WGNX_TLS_FAILED;
+        flags |= ZTNX_TLS_FAILED;
     }
     flags
 }
 
 /// The last error message (NUL-terminated), or "" if none.
 #[no_mangle]
-pub unsafe extern "C" fn wgnx_tls_last_error(s: *const WgnxTls) -> *const c_char {
+pub unsafe extern "C" fn ztnx_tls_last_error(s: *const ZtnxTls) -> *const c_char {
     let s = &*s;
     if s.error.is_empty() {
         c"".as_ptr()

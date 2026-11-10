@@ -12,17 +12,17 @@
 #include <ctime>
 #include <vector>
 
-#include "wgnx_app.h"
-#include "wgnx_update.h"
+#include "ztnx_app.h"
+#include "ztnx_update.h"
 #include "vsock.hpp"
 
-namespace wgnx {
+namespace ztnx {
 
 thread_local int Runtime::internal_depth_ = 0;
 
 namespace {
 
-#ifndef WGNX_NO_STDIO
+#ifndef ZTNX_NO_STDIO
 std::vector<uint8_t> ReadFile(const std::string &path) {
     std::vector<uint8_t> out;
     FILE *f = std::fopen(path.c_str(), "rb");
@@ -58,7 +58,7 @@ bool MakeWakePair(int *rx, int *tx) {
 
 }  // namespace
 
-#ifndef WGNX_NO_STDIO  // reads the conf with stdio; embedders without it use Adopt()
+#ifndef ZTNX_NO_STDIO  // reads the conf with stdio; embedders without it use Adopt()
 std::unique_ptr<Runtime> Runtime::Start(RuntimeConfig cfg, std::string *error) {
     InternalScope internal;
     std::unique_ptr<Runtime> rt(new Runtime());
@@ -66,38 +66,38 @@ std::unique_ptr<Runtime> Runtime::Start(RuntimeConfig cfg, std::string *error) {
     const RuntimeConfig &c = rt->cfg_;
 
     uint8_t seed[32];
-    wgnx_platform_random(seed, sizeof seed);
-    wgnx_seed_rng(seed);
+    ztnx_platform_random(seed, sizeof seed);
+    ztnx_seed_rng(seed);
     std::vector<uint8_t> conf = ReadFile(c.conf_path);
     if (conf.empty()) {
         *error = "cannot read " + c.conf_path;
         return nullptr;
     }
     bool corrected = false;
-    uint64_t unix_time = wgnx_sane_unix_time(static_cast<uint64_t>(std::time(nullptr)), WGNX_UPDATE_HOST, &corrected);
+    uint64_t unix_time = ztnx_sane_unix_time(static_cast<uint64_t>(std::time(nullptr)), ZTNX_UPDATE_HOST, &corrected);
     if (unix_time == 0) unix_time = static_cast<uint64_t>(std::time(nullptr));
-    rt->engine_ = wgnx_engine_new(wgnx_driver_now_ns(), unix_time);
-    WgnxConfig wc{};
+    rt->engine_ = ztnx_engine_new(ztnx_driver_now_ns(), unix_time);
+    ZtnxConfig wc{};
     wc.conf = reinterpret_cast<const char *>(conf.data());
     wc.conf_len = conf.size();
     char err[160];
-    if (!wgnx_engine_reload(rt->engine_, &wc, wgnx_driver_now_ns(), err, sizeof err)) {
+    if (!ztnx_engine_reload(rt->engine_, &wc, ztnx_driver_now_ns(), err, sizeof err)) {
         *error = c.conf_path + ": " + err;
         return nullptr;
     }
-    WgnxPrefix routes[VSock::MaxRoutes];
-    const size_t n = wgnx_engine_routes(rt->engine_, routes, VSock::MaxRoutes);
+    ZtnxPrefix routes[VSock::MaxRoutes];
+    const size_t n = ztnx_engine_routes(rt->engine_, routes, VSock::MaxRoutes);
     VSock::SetRoutes(routes, std::min(n, VSock::MaxRoutes));
     Runtime *self = rt.get();
-    rt->driver_ = wgnx_driver_new(
+    rt->driver_ = ztnx_driver_new(
         rt->engine_,
-        [](void *ctx, const WgnxEvent *ev) {
+        [](void *ctx, const ZtnxEvent *ev) {
             auto *r = static_cast<Runtime *>(ctx);
             if (r->cfg_.on_event) r->cfg_.on_event(*ev);
         },
         self);
-    const uint16_t port = c.udp_port ? c.udp_port : wgnx_engine_listen_port(rt->engine_);
-    if (wgnx_driver_open_udp(rt->driver_, port) != 0 && wgnx_driver_open_udp(rt->driver_, 0) != 0) {
+    const uint16_t port = c.udp_port ? c.udp_port : ztnx_engine_listen_port(rt->engine_);
+    if (ztnx_driver_open_udp(rt->driver_, port) != 0 && ztnx_driver_open_udp(rt->driver_, 0) != 0) {
         *error = "cannot open a UDP socket";
         return nullptr;
     }
@@ -110,7 +110,7 @@ std::unique_ptr<Runtime> Runtime::Start(RuntimeConfig cfg, std::string *error) {
 }
 #endif
 
-std::unique_ptr<Runtime> Runtime::Adopt(WgnxEngine *engine, WgnxDriver *driver, std::string *error) {
+std::unique_ptr<Runtime> Runtime::Adopt(ZtnxEngine *engine, ZtnxDriver *driver, std::string *error) {
     std::unique_ptr<Runtime> rt(new Runtime());
     rt->engine_ = engine;
     rt->driver_ = driver;
@@ -122,7 +122,7 @@ std::unique_ptr<Runtime> Runtime::Adopt(WgnxEngine *engine, WgnxDriver *driver, 
     return rt;
 }
 
-void Runtime::Run(const std::function<void(WgnxDriver *)> &on_tick, const std::function<void()> &after_tick) {
+void Runtime::Run(const std::function<void(ZtnxDriver *)> &on_tick, const std::function<void()> &after_tick) {
     Loop(&on_tick, &after_tick);
 }
 
@@ -139,8 +139,8 @@ Runtime::~Runtime() {
     Stop();
     if (thread_.joinable()) thread_.join();
     if (owned_) {
-        wgnx_driver_free(driver_);
-        wgnx_engine_free(engine_);
+        ztnx_driver_free(driver_);
+        ztnx_engine_free(engine_);
     }
     if (wake_rx_ >= 0) close(wake_rx_);
     if (wake_tx_ >= 0) close(wake_tx_);
@@ -154,11 +154,11 @@ void Runtime::Wake() {
 
 void Runtime::AfterCall() {
     if (suspended_) return;  // I/O resumes (and gets pumped) on Resume()
-    wgnx_driver_pump(driver_);
+    ztnx_driver_pump(driver_);
     // A wake-up costs the loop a round of socket calls, and most calls (a
     // datagram sent or read, a readiness check) leave its poll as good as
     // it was. A loop that isn't in poll() prepares a new one anyway.
-    if (polling_ && wgnx_driver_poll_stale(driver_, poll_until_ns_)) Wake();
+    if (polling_ && ztnx_driver_poll_stale(driver_, poll_until_ns_)) Wake();
 }
 
 bool Runtime::Suspend(SuspendReason why, std::chrono::milliseconds timeout) {
@@ -198,7 +198,7 @@ void Runtime::WaitForLoop() {
     gate_cv_.wait(gate, [&] { return !loop_wants_lock_.load(std::memory_order_acquire); });
 }
 
-bool Runtime::WaitFor(const std::function<bool(WgnxEngine *)> &ready, const Clock::time_point *deadline) {
+bool Runtime::WaitFor(const std::function<bool(ZtnxEngine *)> &ready, const Clock::time_point *deadline) {
     std::unique_lock<std::mutex> lock(mu_);
     for (;;) {
         if (ready(engine_)) return true;
@@ -211,9 +211,9 @@ bool Runtime::WaitFor(const std::function<bool(WgnxEngine *)> &ready, const Cloc
     }
 }
 
-void Runtime::Loop(const std::function<void(WgnxDriver *)> *on_tick, const std::function<void()> *after_tick) {
+void Runtime::Loop(const std::function<void(ZtnxDriver *)> *on_tick, const std::function<void()> *after_tick) {
     InternalScope internal;  // this thread only ever does engine work
-    pollfd fds[WGNX_DRIVER_MAX_FDS + 1];
+    pollfd fds[ZTNX_DRIVER_MAX_FDS + 1];
     std::unique_lock<std::mutex> lock(mu_);
     constexpr uint64_t kTickEveryNs = 50'000'000;
     uint64_t last_tick = 0;
@@ -221,7 +221,7 @@ void Runtime::Loop(const std::function<void(WgnxDriver *)> *on_tick, const std::
         suspend_reasons_ |= async_suspend_.exchange(0);
         ApplyRequests();
         if (suspend_reasons_ != 0) {
-            wgnx_driver_suspend(driver_);
+            ztnx_driver_suspend(driver_);
             close(wake_rx_);
             close(wake_tx_);
             wake_rx_ = wake_tx_ = -1;
@@ -241,8 +241,8 @@ void Runtime::Loop(const std::function<void(WgnxDriver *)> *on_tick, const std::
             // second of latency for new overlay sockets.
             if (on_resume_) on_resume_();
             MakeWakePair(&wake_rx_, &wake_tx_);
-            wgnx_driver_resume(driver_);
-            wgnx_engine_network_up(engine_, wgnx_driver_now_ns());
+            ztnx_driver_resume(driver_);
+            ztnx_engine_network_up(engine_, ztnx_driver_now_ns());
             suspended_ = false;
             suspended_flag_ = false;
             cv_.notify_all();
@@ -251,7 +251,7 @@ void Runtime::Loop(const std::function<void(WgnxDriver *)> *on_tick, const std::
         // Housekeeping at most every kTickEveryNs: under load the loop runs
         // hundreds of rounds a second, and the embedder's tick (status,
         // logs, heap stats) would hold the lock through every one.
-        const uint64_t tick_now = wgnx_driver_now_ns();
+        const uint64_t tick_now = ztnx_driver_now_ns();
         bool ticked = false;
         if (on_tick && *on_tick && tick_now - last_tick >= kTickEveryNs) {
             last_tick = tick_now;
@@ -259,19 +259,19 @@ void Runtime::Loop(const std::function<void(WgnxDriver *)> *on_tick, const std::
             ticked = true;
         }
         int wait = 0;
-        int n = wgnx_driver_prepare(driver_, fds, WGNX_DRIVER_MAX_FDS, 1000, &wait);
+        int n = ztnx_driver_prepare(driver_, fds, ZTNX_DRIVER_MAX_FDS, 1000, &wait);
         fds[n].fd = wake_rx_;
         fds[n].events = POLLIN;
         fds[n].revents = 0;
         const int nfds = n + (wake_rx_ >= 0 ? 1 : 0);
         polling_ = true;
-        poll_until_ns_ = wgnx_driver_now_ns() + static_cast<uint64_t>(wait) * 1000000;
+        poll_until_ns_ = ztnx_driver_now_ns() + static_cast<uint64_t>(wait) * 1000000;
         lock.unlock();
         if (ticked && after_tick && *after_tick) (*after_tick)();
-        int rc = wgnx_driver_poll(driver_, fds, nfds, wait);
+        int rc = ztnx_driver_poll(driver_, fds, nfds, wait);
         // Socket reads without the lock: each is an IPC on the Switch, and
         // callers (an app reading video) would otherwise wait them out.
-        if (rc > 0) wgnx_driver_prefetch(driver_, fds);
+        if (rc > 0) ztnx_driver_prefetch(driver_, fds);
         {
             std::lock_guard<std::mutex> gate(gate_mu_);
             loop_wants_lock_.store(true, std::memory_order_release);
@@ -288,10 +288,10 @@ void Runtime::Loop(const std::function<void(WgnxDriver *)> *on_tick, const std::
             while (recv(wake_rx_, buf, sizeof buf, 0) > 0) {
             }
         }
-        if (rc > 0) wgnx_driver_dispatch(driver_, fds);
+        if (rc > 0) ztnx_driver_dispatch(driver_, fds);
         // Socket readiness may have changed; let waiters re-check.
         cv_.notify_all();
     }
 }
 
-}  // namespace wgnx
+}  // namespace ztnx

@@ -1,12 +1,12 @@
-// wireguard-nx sysmodule: runs the WireGuard engine from boot (boot2), so the
+// zerotier-nx sysmodule: runs the WireGuard engine from boot (boot2), so the
 // console is on its tunnel without any app open.
 //
 // It also MITMs bsd:u for homebrew (bsd_mitm.cpp), so their sockets reach
 // tunnel addresses through the engine (mitm=off in config.ini disables that).
 //
 // Files (SD card):
-//   config/wireguard-nx/<name>.conf  wg-quick style tunnel configuration(s)
-//   config/wireguard-nx/config.ini   conf=<name>.conf (default: the only one,
+//   config/zerotier-nx/<name>.conf  wg-quick style tunnel configuration(s)
+//   config/zerotier-nx/config.ini   conf=<name>.conf (default: the only one,
 //                                    else wg0.conf), log_udp=<ip>:<port>,
 //                                    mitm=homebrew|homebrew,sys-ftpd|off,
 //                                    mitm_titles=<program IDs>, hosts=on|off,
@@ -14,14 +14,14 @@
 //                                    overlay_budget_kb=<128..384>,
 //                                    connect_notice=on|off, update_check=on|off,
 //                                    tunnel_lan=on (tests: LAN through the tunnel)
-//   config/wireguard-nx/disabled     kill switch: if present, exit at boot
-//   config/wireguard-nx/no-update-check  the overlay's update check switch (off)
-//   config/wireguard-nx/crashed      written after 3 boots in a row that ended
+//   config/zerotier-nx/disabled     kill switch: if present, exit at boot
+//   config/zerotier-nx/no-update-check  the overlay's update check switch (off)
+//   config/zerotier-nx/crashed      written after 3 boots in a row that ended
 //                                    within 3 minutes, or 2 sleeps that never woke;
 //                                    keeps it off (delete to retry)
-//   config/wireguard-nx/start_requested  written by the overlay just before it
+//   config/zerotier-nx/start_requested  written by the overlay just before it
 //                                    starts us (its system tick): not a boot start
-//   config/wireguard-nx/sysmodule.log (+ .1 from the previous boot)
+//   config/zerotier-nx/sysmodule.log (+ .1 from the previous boot)
 #include <stratosphere.hpp>
 
 #include <arpa/inet.h>
@@ -39,11 +39,11 @@
 
 extern "C" {
 #include <switch/services/bsd.h>
-#include "wgnx.h"
-#include "wgnx_app.h"
-#include "wgnx_dns.h"
-#include "wgnx_driver.h"
-#include "wgnx_update.h"
+#include "ztnx.h"
+#include "ztnx_app.h"
+#include "ztnx_dns.h"
+#include "ztnx_driver.h"
+#include "ztnx_update.h"
 }
 
 #include <memory>
@@ -64,26 +64,26 @@ namespace ams {
 
     namespace {
 
-        constexpr const char ConfigDir[] = "sdmc:/config/wireguard-nx";
-        constexpr const char ConfigPath[] = "sdmc:/config/wireguard-nx/config.ini";
+        constexpr const char ConfigDir[] = "sdmc:/config/zerotier-nx";
+        constexpr const char ConfigPath[] = "sdmc:/config/zerotier-nx/config.ini";
         // A .conf is a few hundred bytes; 32 peers with names fit easily.
         constexpr size_t ConfMaxSize = 8_KB;
         constexpr const char DefaultConf[] = "wg0.conf";
-        constexpr const char DisabledPath[] = "sdmc:/config/wireguard-nx/disabled";
+        constexpr const char DisabledPath[] = "sdmc:/config/zerotier-nx/disabled";
         // Why we didn't start this time (too little system memory), for the
         // overlay; removed once we do start.
-        constexpr const char NotStartedPath[] = "sdmc:/config/wireguard-nx/not_started";
+        constexpr const char NotStartedPath[] = "sdmc:/config/zerotier-nx/not_started";
         // System memory left for everything launched after us: Nintendo
         // starts some modules on demand, and they fail without it.
         constexpr u64 MinSystemFree = 1_MB;
         // How long after our start to watch the system's free memory (boot
         // and the HOME menu starting), for the log and a low-memory warning.
         constexpr u64 BootLowWindowNs = 120'000'000'000ull;
-        constexpr const char CrashedPath[] = "sdmc:/config/wireguard-nx/crashed";
-        constexpr const char StartingPath[] = "sdmc:/config/wireguard-nx/starting";
-        constexpr const char SleepingPath[] = "sdmc:/config/wireguard-nx/sleeping";
-        constexpr const char SleepFailuresPath[] = "sdmc:/config/wireguard-nx/sleep_failures";
-        constexpr const char StartRequestedPath[] = "sdmc:/config/wireguard-nx/start_requested";
+        constexpr const char CrashedPath[] = "sdmc:/config/zerotier-nx/crashed";
+        constexpr const char StartingPath[] = "sdmc:/config/zerotier-nx/starting";
+        constexpr const char SleepingPath[] = "sdmc:/config/zerotier-nx/sleeping";
+        constexpr const char SleepFailuresPath[] = "sdmc:/config/zerotier-nx/sleep_failures";
+        constexpr const char StartRequestedPath[] = "sdmc:/config/zerotier-nx/start_requested";
         // How old the overlay's start request may be (pm launches at once).
         constexpr u64 StartRequestFreshNs = 30'000'000'000ull;
         // A boot that doesn't last HealthyAfterNs counts against us (the
@@ -94,8 +94,8 @@ namespace ams {
         constexpr u64 HealthyAfterNs = 180'000'000'000ull;
         constexpr u64 BootStartWithinNs = 120'000'000'000ull;
         constexpr int MaxSleepFailures = 2;
-        constexpr const char LogPath[] = "sdmc:/config/wireguard-nx/sysmodule.log";
-        constexpr const char OldLogPath[] = "sdmc:/config/wireguard-nx/sysmodule.log.1";
+        constexpr const char LogPath[] = "sdmc:/config/zerotier-nx/sysmodule.log";
+        constexpr const char OldLogPath[] = "sdmc:/config/zerotier-nx/sysmodule.log.1";
         constexpr s64 LogMaxSize = 512_KB;
 
         // Heap for the engine (Rust core + driver) and our own allocations,
@@ -103,7 +103,7 @@ namespace ams {
         // (heap_size.h). Measured on the console: everything peaked at
         // 629 KB with the default 320 KB overlay budget (a Moonlight
         // connection burst).
-        constexpr size_t MallocBufferSize = WGNX_HEAP_SIZE;
+        constexpr size_t MallocBufferSize = ZTNX_HEAP_SIZE;
         static_assert(MallocBufferSize % os::MemoryPageSize == 0);
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
 
@@ -113,7 +113,7 @@ namespace ams {
         // buffers are taken from it, and one that doesn't fit fails with
         // ENOBUFS. UDP sockets start with a small receive buffer, as only
         // WireGuard's needs to be big, and it grows its own
-        // (wgnx_driver.c): at 48 KB each, the small sockets took so much
+        // (ztnx_driver.c): at 48 KB each, the small sockets took so much
         // that once WireGuard had grown, a new DNS socket didn't fit. The
         // pool keeps the size it had with 48 KB (sb_efficiency sockets'
         // worth), so WireGuard gets what the small sockets no longer take.
@@ -315,7 +315,7 @@ namespace ams {
         // ---- config ------------------------------------------------------
 
         struct Config {
-            char conf[WGNX_CTL_CONF_NAME_MAX] = {};  // the .conf to use (file name in ConfigDir)
+            char conf[ZTNX_CTL_CONF_NAME_MAX] = {};  // the .conf to use (file name in ConfigDir)
             char log_udp[64] = {};
             char mitm[32] = "homebrew";  // "homebrew,sys-ftpd" or "off"
             char mitm_titles[384] = {};  // forwarders' program IDs, served like homebrew
@@ -381,7 +381,7 @@ namespace ams {
         // A .conf file name: just a name (no directories), ending in .conf.
         bool ValidConfName(const char *name) {
             const size_t n = std::strlen(name);
-            if (n < 6 || n >= WGNX_CTL_CONF_NAME_MAX || std::strchr(name, '/') || std::strchr(name, '\\') || std::strstr(name, "..")) return false;
+            if (n < 6 || n >= ZTNX_CTL_CONF_NAME_MAX || std::strchr(name, '/') || std::strchr(name, '\\') || std::strstr(name, "..")) return false;
             return std::strcmp(name + n - 5, ".conf") == 0;
         }
 
@@ -389,7 +389,7 @@ namespace ams {
         // wg0.conf, unless that exists already.
         void RenameTxtConfs() {
             constexpr int Max = 4;
-            char names[Max][WGNX_CTL_CONF_NAME_MAX + 4] = {};
+            char names[Max][ZTNX_CTL_CONF_NAME_MAX + 4] = {};
             int found = 0;
             fs::DirectoryHandle dir;
             if (R_FAILED(fs::OpenDirectory(std::addressof(dir), ConfigDir, fs::OpenDirectoryMode_File))) return;
@@ -426,7 +426,7 @@ namespace ams {
             if (R_FAILED(fs::OpenDirectory(std::addressof(dir), ConfigDir, fs::OpenDirectoryMode_File))) return;
             ON_SCOPE_EXIT { fs::CloseDirectory(dir); };
             static fs::DirectoryEntry entry;  // ~0x310 bytes: not on the stack
-            char only[WGNX_CTL_CONF_NAME_MAX] = {};
+            char only[ZTNX_CTL_CONF_NAME_MAX] = {};
             int found = 0;
             s64 got = 0;
             while (R_SUCCEEDED(fs::ReadDirectory(std::addressof(got), std::addressof(entry), dir, 1)) && got == 1) {
@@ -441,7 +441,7 @@ namespace ams {
         // other .conf files to pick from.
         void DescribeMissingConf(const char *name, char *out, size_t cap) {
             int confs = 0;
-            char txt[WGNX_CTL_CONF_NAME_MAX + 4] = {};
+            char txt[ZTNX_CTL_CONF_NAME_MAX + 4] = {};
             fs::DirectoryHandle dir;
             if (R_SUCCEEDED(fs::OpenDirectory(std::addressof(dir), ConfigDir, fs::OpenDirectoryMode_File))) {
                 ON_SCOPE_EXIT { fs::CloseDirectory(dir); };
@@ -455,11 +455,11 @@ namespace ams {
                 }
             }
             if (confs > 0) {
-                util::SNPrintf(out, cap, "%s isn't in config/wireguard-nx. Pick one of the .conf files there under Config.", name);
+                util::SNPrintf(out, cap, "%s isn't in config/zerotier-nx. Pick one of the .conf files there under Config.", name);
             } else if (txt[0]) {
                 util::SNPrintf(out, cap, "Rename %s to %.*s, then restart the Switch.", txt, static_cast<int>(std::strlen(txt) - 4), txt);
             } else {
-                util::SNPrintf(out, cap, "No .conf in config/wireguard-nx. Copy your WireGuard config there and restart.");
+                util::SNPrintf(out, cap, "No .conf in config/zerotier-nx. Copy your WireGuard config there and restart.");
             }
         }
 
@@ -501,7 +501,7 @@ namespace ams {
                 const u64 now = armTicksToNs(armGetSystemTick());
                 if (now >= deadline) break;
                 const int timeout_ms = static_cast<int>(std::min<u64>(1500, (deadline - now) / 1'000'000));
-                if (wgnx_dns_query_a(servers[i], host, out, timeout_ms) == 0) return 0;
+                if (ztnx_dns_query_a(servers[i], host, out, timeout_ms) == 0) return 0;
                 Log("dns: %s via %s failed: errno %d", host, inet_ntoa(in_addr{servers[i]}), errno);
             }
             return -1;
@@ -519,13 +519,13 @@ namespace ams {
             if (ip && R_SUCCEEDED(nifmGetCurrentIpConfigInfo(&cur, &mask, &gw, &dns1, &dns2)) && cur == ip) {
                 len = static_cast<unsigned>(__builtin_popcount(mask));
             }
-            ::wgnx::VSock::SetLocalNet(ntohl(ip), len);
+            ::ztnx::VSock::SetLocalNet(ntohl(ip), len);
         }
 
         // The network clock if synced, else the user clock.
         u64 ConsoleUnixTime() {
             u64 t = 0;
-            if (R_SUCCEEDED(timeGetCurrentTime(TimeType_NetworkSystemClock, &t)) && t > static_cast<u64>(WGNX_BUILD_UNIX)) return t;
+            if (R_SUCCEEDED(timeGetCurrentTime(TimeType_NetworkSystemClock, &t)) && t > static_cast<u64>(ZTNX_BUILD_UNIX)) return t;
             if (R_SUCCEEDED(timeGetCurrentTime(TimeType_UserSystemClock, &t))) return t;
             return 0;
         }
@@ -536,14 +536,14 @@ namespace ams {
         // is gone), or a minute after starting if it doesn't connect: a newer
         // release on GitHub gets a toast. Failures are only logged. Off with
         // update_check=off or the overlay's switch.
-        constexpr const char NoUpdateCheckPath[] = "sdmc:/config/wireguard-nx/no-update-check";
+        constexpr const char NoUpdateCheckPath[] = "sdmc:/config/zerotier-nx/no-update-check";
         constexpr u64 UpdateCheckAfterConnectNs = 10'000'000'000ull;
         constexpr u64 UpdateCheckLatestNs = 60'000'000'000ull;
         constexpr u32 UpdateCheckTimeoutMs = 30'000;
 
         constinit bool g_update_check = false;  // still to do this boot
         constinit u64 g_update_check_at_ns = 0;  // 0: counted from the next tick
-        constinit WgnxUpdate *g_update = nullptr;
+        constinit ZtnxUpdate *g_update = nullptr;
 
         // Engine loop, runtime lock held. Only the start blocks (DNS lookup).
         void StepUpdateCheck(u64 now) {
@@ -561,24 +561,24 @@ namespace ams {
                     g_update_check = false;
                     return;
                 }
-                g_update = wgnx_update_start(WGNX_UPDATE_REPO, wgnx_version(), wgnx_driver_now_ns(), UpdateCheckTimeoutMs);
+                g_update = ztnx_update_start(ZTNX_UPDATE_REPO, ztnx_version(), ztnx_driver_now_ns(), UpdateCheckTimeoutMs);
                 if (!g_update) {
                     Log("update check: out of memory");
                     g_update_check = false;
                     return;
                 }
             }
-            const int r = wgnx_update_step(g_update, wgnx_driver_now_ns());
-            if (r == WGNX_UPDATE_PENDING) return;
-            if (r == WGNX_UPDATE_NEWER) {
-                Log("update check: %s is available (this is %s)", wgnx_update_latest(g_update), wgnx_version());
-                status::AnnounceUpdate(wgnx_update_latest(g_update));
-            } else if (r == WGNX_UPDATE_CURRENT) {
-                Log("update check: up to date (latest release %s)", wgnx_update_latest(g_update));
+            const int r = ztnx_update_step(g_update, ztnx_driver_now_ns());
+            if (r == ZTNX_UPDATE_PENDING) return;
+            if (r == ZTNX_UPDATE_NEWER) {
+                Log("update check: %s is available (this is %s)", ztnx_update_latest(g_update), ztnx_version());
+                status::AnnounceUpdate(ztnx_update_latest(g_update));
+            } else if (r == ZTNX_UPDATE_CURRENT) {
+                Log("update check: up to date (latest release %s)", ztnx_update_latest(g_update));
             } else {
-                Log("update check failed: %s", wgnx_update_error(g_update));
+                Log("update check failed: %s", ztnx_update_error(g_update));
             }
-            wgnx_update_free(g_update);
+            ztnx_update_free(g_update);
             g_update = nullptr;
             g_update_check = false;
         }
@@ -587,7 +587,7 @@ namespace ams {
         // again a while after resuming.
         void SuspendUpdateCheck() {
             if (g_update) {
-                wgnx_update_free(g_update);
+                ztnx_update_free(g_update);
                 g_update = nullptr;
                 Log("update check: interrupted; trying again after resuming");
             }
@@ -598,19 +598,19 @@ namespace ams {
         // in the log and a toast.
         void WatchBootMemory(u64 now_ns) {
             u64 low = 0;
-            if (!memory::SampleBootLow(now_ns, BootLowWindowNs, &low) || low >= WGNX_CTL_LOW_SYSTEM_FREE_KB * 1024ull) return;
-            Log("WARN memory: under %u KB free: modules started later can fail (2001-0132)", WGNX_CTL_LOW_SYSTEM_FREE_KB);
+            if (!memory::SampleBootLow(now_ns, BootLowWindowNs, &low) || low >= ZTNX_CTL_LOW_SYSTEM_FREE_KB * 1024ull) return;
+            Log("WARN memory: under %u KB free: modules started later can fail (2001-0132)", ZTNX_CTL_LOW_SYSTEM_FREE_KB);
             status::AnnounceLowMemory(static_cast<u32>(low / 1024));
         }
 
         const char *EventName(u32 kind) {
             switch (kind) {
-                case WGNX_EVENT_ADDRESSES: return "addresses";
-                case WGNX_EVENT_PEERS: return "peers";
-                case WGNX_EVENT_ERROR: return "error";
-                case WGNX_EVENT_RESOLVE: return "resolve";
-                case WGNX_EVENT_HANDSHAKE: return "handshake";
-                case WGNX_EVENT_PEER_LOST: return "peer-lost";
+                case ZTNX_EVENT_ADDRESSES: return "addresses";
+                case ZTNX_EVENT_PEERS: return "peers";
+                case ZTNX_EVENT_ERROR: return "error";
+                case ZTNX_EVENT_RESOLVE: return "resolve";
+                case ZTNX_EVENT_HANDSHAKE: return "handshake";
+                case ZTNX_EVENT_PEER_LOST: return "peer-lost";
                 default: return "log";
             }
         }
@@ -631,7 +631,7 @@ namespace ams {
         // through the engine, anything else a real socket.
         void StartUdpLog() {
             if (g_log_udp_addr.sin_family != AF_INET) return;
-            const bool tunnel = ::wgnx::VSock::IsTunnel(reinterpret_cast<const sockaddr *>(std::addressof(g_log_udp_addr)));
+            const bool tunnel = ::ztnx::VSock::IsTunnel(reinterpret_cast<const sockaddr *>(std::addressof(g_log_udp_addr)));
             std::scoped_lock lk(g_log_mutex);
             if (tunnel == g_log_tunnel && (tunnel || g_log_udp_fd >= 0)) return;
             g_log_tunnel = tunnel;
@@ -657,12 +657,12 @@ namespace ams {
         // Sends queued log lines through the tunnel (engine loop, runtime lock
         // held). Waits while we're not on the tunnel; lines from boot are
         // kept (the oldest dropped if the queue fills).
-        void FlushTunnelLog(WgnxEngine *engine) {
+        void FlushTunnelLog(ZtnxEngine *engine) {
             static int32_t udp = 0;
             static char out[sizeof g_tunnel_log];
             if (!g_log_tunnel) return;
-            const WgnxCtlStatus st = status::Get();
-            if (st.state != WGNX_CTL_CONNECTED) return;
+            const ZtnxCtlStatus st = status::Get();
+            if (st.state != ZTNX_CTL_CONNECTED) return;
             if (armTicksToNs(armGetSystemTick()) < g_tunnel_log_hold_until_ns) return;
             size_t len;
             {
@@ -672,16 +672,16 @@ namespace ams {
                 std::memcpy(out, g_tunnel_log, len);
                 g_tunnel_log_len = 0;
             }
-            if (udp <= 0) udp = wgnx_net_udp_bind(engine, 0);
+            if (udp <= 0) udp = ztnx_net_udp_bind(engine, 0);
             if (udp <= 0) return;
-            WgnxAddr dst = {};
+            ZtnxAddr dst = {};
             dst.family = 4;
             std::memcpy(dst.ip, &g_log_udp_addr.sin_addr.s_addr, 4);
             dst.port = ntohs(g_log_udp_addr.sin_port);
             for (size_t off = 0; off < len;) {
                 const char *nl = static_cast<const char *>(std::memchr(out + off, '\n', len - off));
                 const size_t n = (nl ? static_cast<size_t>(nl - (out + off)) : len - off) + (nl ? 1 : 0);
-                wgnx_net_udp_sendto(engine, udp, reinterpret_cast<const u8 *>(out + off), n, &dst);
+                ztnx_net_udp_sendto(engine, udp, reinterpret_cast<const u8 *>(out + off), n, &dst);
                 off += n;
             }
         }
@@ -715,17 +715,17 @@ namespace ams {
         // ---- the tunnel's configuration ------------------------------------
 
         constinit os::SdkMutex g_conf_mutex;
-        constinit char g_conf_name[WGNX_CTL_CONF_NAME_MAX] = {};
+        constinit char g_conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
         constinit bool g_hosts_on = true;
         constinit bool g_aliases_on = true;
         constinit std::atomic<bool> g_hosts_due = false;  // Collect() ran; Write() pending
 
-        // Loads config/wireguard-nx/<name> into the engine (directly at boot,
+        // Loads config/zerotier-nx/<name> into the engine (directly at boot,
         // through the runtime once it runs), tells the MITM and the hosts
-        // file, and records the outcome for the overlay. Returns WGNX_CTL_CONF_*.
-        u32 ApplyConf(const char *name, WgnxEngine *engine, ::wgnx::Runtime *rt) {
+        // file, and records the outcome for the overlay. Returns ZTNX_CTL_CONF_*.
+        u32 ApplyConf(const char *name, ZtnxEngine *engine, ::ztnx::Runtime *rt) {
             std::scoped_lock lk(g_conf_mutex);
-            if (!ValidConfName(name)) return WGNX_CTL_CONF_NOT_FOUND;
+            if (!ValidConfName(name)) return ZTNX_CTL_CONF_NOT_FOUND;
             char path[128];
             util::SNPrintf(path, sizeof path, "%s/%s", ConfigDir, name);
             auto text = std::make_unique<char[]>(ConfMaxSize);
@@ -737,20 +737,20 @@ namespace ams {
                 // From the overlay's Config page the file was there a moment
                 // ago, and the running config stays: only a boot has none.
                 if (!rt) status::SetConfMissing(what);
-                return WGNX_CTL_CONF_NOT_FOUND;
+                return ZTNX_CTL_CONF_NOT_FOUND;
             }
-            WgnxConfig wc = {};
+            ZtnxConfig wc = {};
             wc.conf = text.get();
             wc.conf_len = static_cast<size_t>(len);
             static char err[160];
-            static WgnxPrefix routes[::wgnx::VSock::MaxRoutes];  // 64 * 24 bytes: static, not stack
+            static ZtnxPrefix routes[::ztnx::VSock::MaxRoutes];  // 64 * 24 bytes: static, not stack
             size_t n_routes = 0;
             u32 peers = 0;
-            auto load = [&](WgnxEngine *e) {
-                if (!wgnx_engine_reload(e, &wc, wgnx_driver_now_ns(), err, sizeof err)) return false;
-                n_routes = wgnx_engine_routes(e, routes, ::wgnx::VSock::MaxRoutes);
-                static WgnxPeerInfo info[WGNX_CTL_MAX_PEERS];
-                peers = static_cast<u32>(wgnx_engine_peers(e, info, WGNX_CTL_MAX_PEERS));
+            auto load = [&](ZtnxEngine *e) {
+                if (!ztnx_engine_reload(e, &wc, ztnx_driver_now_ns(), err, sizeof err)) return false;
+                n_routes = ztnx_engine_routes(e, routes, ::ztnx::VSock::MaxRoutes);
+                static ZtnxPeerInfo info[ZTNX_CTL_MAX_PEERS];
+                peers = static_cast<u32>(ztnx_engine_peers(e, info, ZTNX_CTL_MAX_PEERS));
                 if (g_hosts_on) g_hosts_due = hosts::Collect(e, g_aliases_on) || g_hosts_due.load();
                 return true;
             };
@@ -758,22 +758,22 @@ namespace ams {
             if (!ok) {
                 Log("config: %s: %s", name, err);
                 status::SetConfError(name, err);
-                return WGNX_CTL_CONF_INVALID;
+                return ZTNX_CTL_CONF_INVALID;
             }
-            ::wgnx::VSock::SetRoutes(routes, std::min(n_routes, ::wgnx::VSock::MaxRoutes));
+            ::ztnx::VSock::SetRoutes(routes, std::min(n_routes, ::ztnx::VSock::MaxRoutes));
             util::SNPrintf(g_conf_name, sizeof g_conf_name, "%s", name);
             status::SetConf(name, peers);
-            WgnxPrefix addr[1];
-            const bool have_addr = wgnx_engine_addresses(engine, addr, 1) > 0 && addr[0].family == 4;
+            ZtnxPrefix addr[1];
+            const bool have_addr = ztnx_engine_addresses(engine, addr, 1) > 0 && addr[0].family == 4;
             u32 addr_be = 0;
             if (have_addr) std::memcpy(&addr_be, addr[0].ip, 4);
             Log("config: %s: %u peer(s), address %s, tunnel routes %zu%s", name, peers, have_addr ? inet_ntoa(in_addr{addr_be}) : "(none)",
-                n_routes, n_routes > ::wgnx::VSock::MaxRoutes ? " (only the first 64 are used)" : "");
+                n_routes, n_routes > ::ztnx::VSock::MaxRoutes ? " (only the first 64 are used)" : "");
             StartUdpLog();
-            return WGNX_CTL_CONF_OK;
+            return ZTNX_CTL_CONF_OK;
         }
 
-        // Host names in Endpoint= lines: the engine asks (WGNX_EVENT_RESOLVE,
+        // Host names in Endpoint= lines: the engine asks (ZTNX_EVENT_RESOLVE,
         // with the runtime lock held, where a lookup must not block), the
         // loop looks them up between rounds without the lock, and answers
         // on its next round.
@@ -788,9 +788,9 @@ namespace ams {
         constinit Resolve g_resolve_done[8] = {};
         constinit u32 g_resolve_done_ip[8] = {};
         constinit int g_resolve_done_n = 0;
-        constinit u64 g_resolve_last_ns[WGNX_CTL_MAX_PEERS] = {};
+        constinit u64 g_resolve_last_ns[ZTNX_CTL_MAX_PEERS] = {};
 
-        void QueueResolve(const WgnxEvent &ev) {
+        void QueueResolve(const ZtnxEvent &ev) {
             std::scoped_lock lk(g_resolve_mutex);
             for (int i = 0; i < g_resolve_asked_n; i++)
                 if (g_resolve_asked[i].peer == ev.value) return;
@@ -813,8 +813,8 @@ namespace ams {
                 g_resolve_asked_n--;
             }
             const u64 now = armTicksToNs(armGetSystemTick());
-            if (r.peer < WGNX_CTL_MAX_PEERS && g_resolve_last_ns[r.peer] && now - g_resolve_last_ns[r.peer] < 10'000'000'000ull) return;
-            if (r.peer < WGNX_CTL_MAX_PEERS) g_resolve_last_ns[r.peer] = now;
+            if (r.peer < ZTNX_CTL_MAX_PEERS && g_resolve_last_ns[r.peer] && now - g_resolve_last_ns[r.peer] < 10'000'000'000ull) return;
+            if (r.peer < ZTNX_CTL_MAX_PEERS) g_resolve_last_ns[r.peer] = now;
             u32 ip = 0;
             bool ok = false;
             Timed("endpoint lookup", [&] { ok = ResolveViaDns(r.host, &ip) == 0; });
@@ -829,16 +829,16 @@ namespace ams {
         }
 
         // With the runtime lock: hand the answers to the engine.
-        void ApplyResolved(WgnxEngine *engine) {
+        void ApplyResolved(ZtnxEngine *engine) {
             std::scoped_lock lk(g_resolve_mutex);
             for (int i = 0; i < g_resolve_done_n; i++) {
                 const Resolve &r = g_resolve_done[i];
-                WgnxAddr a = {};
+                ZtnxAddr a = {};
                 a.family = 4;
                 std::memcpy(a.ip, &g_resolve_done_ip[i], 4);
                 a.port = r.port;
                 Log("endpoint: peer %u = %s -> %s:%u", r.peer, r.host, inet_ntoa(in_addr{g_resolve_done_ip[i]}), r.port);
-                wgnx_engine_set_peer_endpoint(engine, r.peer, &a, wgnx_driver_now_ns());
+                ztnx_engine_set_peer_endpoint(engine, r.peer, &a, ztnx_driver_now_ns());
             }
             g_resolve_done_n = 0;
         }
@@ -848,11 +848,11 @@ namespace ams {
         // With our sockets open and in use across sleep, the transition
         // failed and omm aborted (2165-0001). So we take part in power-state
         // changes (psc) and close every socket we own on the way down.
-        constexpr auto WgnxPmModuleId = static_cast<psc::PmModuleId>(0x7747);
+        constexpr auto ZtnxPmModuleId = static_cast<psc::PmModuleId>(0x7747);
         constexpr psc::PmModuleId PmDependencies[] = {psc::PmModuleId_Nifm, psc::PmModuleId_Fs};
 
         psc::PmModule g_pm_module;
-        constinit ::wgnx::Runtime *g_power_runtime = nullptr;
+        constinit ::ztnx::Runtime *g_power_runtime = nullptr;
         alignas(os::ThreadStackAlignment) constinit u8 g_power_thread_stack[0x2000];  // measured: ~1 KB
         constinit os::ThreadType g_power_thread;
         constinit bool g_power_running = false;  // registered with psc, thread started
@@ -895,7 +895,7 @@ namespace ams {
                     // A reboot or power-off (ShutdownReady) never wakes, so it
                     // must not count as a failed sleep.
                     if (state != psc::PmState_ShutdownReady) WriteWholeFile(SleepingPath, "1", 1);  // removed on wake; see PassesCrashGuard
-                    g_power_runtime->RequestSuspend(::wgnx::Runtime::kSleep);
+                    g_power_runtime->RequestSuspend(::ztnx::Runtime::kSleep);
                     const u64 deadline = armTicksToNs(armGetSystemTick()) + 2'500'000'000ull;
                     while (!g_power_runtime->IsSuspended() && armTicksToNs(armGetSystemTick()) < deadline) {
                         os::SleepThread(TimeSpan::FromMilliSeconds(10));
@@ -917,7 +917,7 @@ namespace ams {
                 if (suspended && (waking || state == psc::PmState_FullAwake)) wake_held_ns += armTicksToNs(armGetSystemTick()) - asked;
                 if (suspended && state == psc::PmState_FullAwake) {
                     g_log_udp_paused = false;
-                    g_power_runtime->Resume(::wgnx::Runtime::kSleep);
+                    g_power_runtime->Resume(::ztnx::Runtime::kSleep);
                     suspended = false;
                     static_cast<void>(fs::DeleteFile(SleepingPath));
                     static_cast<void>(fs::DeleteFile(SleepFailuresPath));
@@ -952,13 +952,13 @@ namespace ams {
 
         // Without psc, sleep with our sockets open makes omm abort (the
         // console restarts): false means don't run at all.
-        bool StartPowerHandling(::wgnx::Runtime &rt) {
+        bool StartPowerHandling(::ztnx::Runtime &rt) {
             g_power_runtime = std::addressof(rt);
             if (R_FAILED(::pscmInitialize())) {
                 Log("power: psc unavailable; not starting (sleep would fail)");
                 return false;
             }
-            if (const Result rc = g_pm_module.Initialize(WgnxPmModuleId, PmDependencies, util::size(PmDependencies), os::EventClearMode_AutoClear); R_FAILED(rc)) {
+            if (const Result rc = g_pm_module.Initialize(ZtnxPmModuleId, PmDependencies, util::size(PmDependencies), os::EventClearMode_AutoClear); R_FAILED(rc)) {
                 Log("power: psc module registration failed: 0x%x; not starting (sleep would fail)", rc.GetValue());
                 return false;
             }
@@ -970,7 +970,7 @@ namespace ams {
                 static_cast<void>(g_pm_module.Finalize());
                 return false;
             }
-            os::SetThreadNamePointer(std::addressof(g_power_thread), "wgnx.Power");
+            os::SetThreadNamePointer(std::addressof(g_power_thread), "ztnx.Power");
             stack_watch::Add("power", std::addressof(g_power_thread));
             os::StartThread(std::addressof(g_power_thread));
             g_power_running = true;
@@ -1054,7 +1054,7 @@ namespace ams {
             Log("%s: disabling (see %s)", why, CrashedPath);
             char msg[256];
             const int n = util::SNPrintf(msg, sizeof msg,
-                                        "wireguard-nx stopped itself: %s.\n"
+                                        "zerotier-nx stopped itself: %s.\n"
                                         "See sysmodule.log / sysmodule.log.1. Delete this file to try again.\n", why);
             WriteWholeFile(CrashedPath, msg, n);
             static_cast<void>(fs::DeleteFile(StartingPath));
@@ -1086,20 +1086,20 @@ namespace ams {
 
     namespace {
 
-        constinit ::wgnx::Runtime *g_runtime = nullptr;
+        constinit ::ztnx::Runtime *g_runtime = nullptr;
         constinit std::atomic<bool> g_stopping = false;  // committed: exit once the engine loop ends
         constinit bool g_stop_failed = false;  // committed but can't exit: idle until restart
 
-        // wgnx:ctl Stop, on the ctl thread. Exiting is safe only with no
+        // ztnx:ctl Stop, on the ctl thread. Exiting is safe only with no
         // client session through our MITM, the MITM uninstalled from sm
         // (sm aborts on queries to a dead owner), our psc module gone (the
         // system would wait on it at sleep) and our sockets closed before
         // that. Each check that can refuse runs while it can still be undone.
         u32 StopForOverlay(u32 *detail) {
             *detail = 0;
-            if (g_stopping) return WGNX_CTL_STOP_OK;
-            if (g_stop_failed) return WGNX_CTL_STOP_FAILED;
-            if (!g_runtime) return WGNX_CTL_STOP_BUSY;
+            if (g_stopping) return ZTNX_CTL_STOP_OK;
+            if (g_stop_failed) return ZTNX_CTL_STOP_FAILED;
+            if (!g_runtime) return ZTNX_CTL_STOP_BUSY;
             Log("stop: requested from the overlay");
 
             // 1. No homebrew sessions; new ones bypass us from now on.
@@ -1108,23 +1108,23 @@ namespace ams {
                     break;
                 case bsd_mitm::StopCheck::Homebrew:
                     Log("stop: refused, homebrew has %u session(s) through us", *detail);
-                    return WGNX_CTL_STOP_HOMEBREW;
+                    return ZTNX_CTL_STOP_HOMEBREW;
                 case bsd_mitm::StopCheck::Busy:
-                    return WGNX_CTL_STOP_BUSY;
+                    return ZTNX_CTL_STOP_BUSY;
             }
             // 2. Close the engine's sockets (and the UDP log's).
-            if (!g_runtime->Suspend(::wgnx::Runtime::kStopping, std::chrono::milliseconds(3000))) {
+            if (!g_runtime->Suspend(::ztnx::Runtime::kStopping, std::chrono::milliseconds(3000))) {
                 Log("stop: refused, the engine didn't close its sockets in time");
-                g_runtime->Resume(::wgnx::Runtime::kStopping);
+                g_runtime->Resume(::ztnx::Runtime::kStopping);
                 bsd_mitm::CancelStop();
-                return WGNX_CTL_STOP_BUSY;
+                return ZTNX_CTL_STOP_BUSY;
             }
             // 3. Leave psc, unless a sleep or wake is under way.
             if (!StopPowerHandling()) {
                 Log("stop: refused, a power state change is under way");
-                g_runtime->Resume(::wgnx::Runtime::kStopping);
+                g_runtime->Resume(::ztnx::Runtime::kStopping);
                 bsd_mitm::CancelStop();
-                return WGNX_CTL_STOP_BUSY;
+                return ZTNX_CTL_STOP_BUSY;
             }
 
             // Committed. On failure from here on the process stays, idle:
@@ -1135,12 +1135,12 @@ namespace ams {
             if (!bsd_mitm::UninstallForStop()) {
                 Log("stop: couldn't detach from the system cleanly; staying idle until the console restarts");
                 g_stop_failed = true;
-                return WGNX_CTL_STOP_FAILED;
+                return ZTNX_CTL_STOP_FAILED;
             }
             Log("stop: exiting (it starts again at boot, or from the overlay)");
             g_stopping = true;
             g_runtime->Stop();  // the main thread exits once the loop returns
-            return WGNX_CTL_STOP_OK;
+            return ZTNX_CTL_STOP_OK;
         }
 
         // After StopForOverlay: nothing of ours is registered anywhere, and
@@ -1157,15 +1157,15 @@ namespace ams {
             __builtin_unreachable();
         }
 
-        constinit WgnxEngine *g_engine = nullptr;
+        constinit ZtnxEngine *g_engine = nullptr;
 
-        // wgnx:ctl SetConf, on the ctl thread: switch to another .conf and
+        // ztnx:ctl SetConf, on the ctl thread: switch to another .conf and
         // make it the default for the next boot.
         u32 SetConfForOverlay(const char *name) {
-            if (g_stopping || g_stop_failed || !g_runtime || !g_engine || status::IsStopping()) return WGNX_CTL_CONF_BUSY;
+            if (g_stopping || g_stop_failed || !g_runtime || !g_engine || status::IsStopping()) return ZTNX_CTL_CONF_BUSY;
             Log("config: switching to %s (from the overlay)", name);
             const u32 rc = ApplyConf(name, g_engine, g_runtime);
-            if (rc == WGNX_CTL_CONF_OK) SetConfigValue("conf", name);
+            if (rc == ZTNX_CTL_CONF_OK) SetConfigValue("conf", name);
             return rc;
         }
 
@@ -1178,7 +1178,7 @@ namespace ams {
         static_cast<void>(fs::CreateDirectory("sdmc:/config"));
         static_cast<void>(fs::CreateDirectory(ConfigDir));
         OpenLog();
-        Log("wireguard-nx sysmodule %s starting", wgnx_version());
+        Log("zerotier-nx sysmodule %s starting", ztnx_version());
         if (FileExists(DisabledPath)) {
             Log("%s exists: staying disabled", DisabledPath);
             return;
@@ -1195,7 +1195,7 @@ namespace ams {
         if (pool_known && sys_free < MinSystemFree) {
             char why[200];
             const int n = util::SNPrintf(why, sizeof why,
-                                         "Too little system memory: other sysmodules leave %lu KB free with wireguard-nx running, "
+                                         "Too little system memory: other sysmodules leave %lu KB free with zerotier-nx running, "
                                          "and it keeps %lu KB free for the system.\n",
                                          static_cast<unsigned long>(sys_free / 1024), static_cast<unsigned long>(MinSystemFree / 1024));
             Log("%.*s; not starting", n - 1, why);
@@ -1223,13 +1223,13 @@ namespace ams {
         Config cfg;
         LoadConfig(cfg);
         if (cfg.log_udp[0]) SetUpUdpLog(cfg.log_udp);  // opened once the tunnel's routes are known
-        wgnx_set_log_callback([](u32 level, const char *msg) { Log("%s%s", level <= 2 ? "WARN " : "", msg); }, 3);
-        wgnx_set_resolver(ResolveViaDns);
+        ztnx_set_log_callback([](u32 level, const char *msg) { Log("%s%s", level <= 2 ? "WARN " : "", msg); }, 3);
+        ztnx_set_resolver(ResolveViaDns);
 
         u8 seed[32];
         os::GenerateRandomBytes(seed, sizeof seed);
-        wgnx_seed_rng(seed);
-        if (const u32 st = wgnx_selftest(); st != WGNX_SELFTEST_OK) {
+        ztnx_seed_rng(seed);
+        if (const u32 st = ztnx_selftest(); st != ZTNX_SELFTEST_OK) {
             Log("crypto selftest FAILED (%u); not starting", st);
             return;
         }
@@ -1254,20 +1254,20 @@ namespace ams {
         // timestamps must never go backwards, or peers ignore us).
         bool corrected = false;
         const u64 console_time = ConsoleUnixTime();
-        u64 unix_time = wgnx_sane_unix_time(console_time, WGNX_UPDATE_HOST, &corrected);
+        u64 unix_time = ztnx_sane_unix_time(console_time, ZTNX_UPDATE_HOST, &corrected);
         if (corrected) Log("console clock implausible (%llu); using %s's time (%llu)",
-                           static_cast<unsigned long long>(console_time), WGNX_UPDATE_HOST, static_cast<unsigned long long>(unix_time));
+                           static_cast<unsigned long long>(console_time), ZTNX_UPDATE_HOST, static_cast<unsigned long long>(unix_time));
         if (unix_time == 0) unix_time = console_time;
 
-        WgnxEngine *engine = wgnx_engine_new(wgnx_driver_now_ns(), unix_time);
+        ZtnxEngine *engine = ztnx_engine_new(ztnx_driver_now_ns(), unix_time);
         g_engine = engine;
         g_hosts_on = std::strcmp(cfg.hosts, "off") != 0;
         g_aliases_on = std::strcmp(cfg.aliases, "off") != 0;
         if (std::strcmp(cfg.tunnel_lan, "on") == 0) {
             Log("tunnel_lan=on: LAN addresses go through the tunnel too (testing)");
-            ::wgnx::VSock::SetTunnelLan(true);
+            ::ztnx::VSock::SetTunnelLan(true);
         }
-        char conf_name[WGNX_CTL_CONF_NAME_MAX];
+        char conf_name[ZTNX_CTL_CONF_NAME_MAX];
         RenameTxtConfs();
         SelectConf(cfg, conf_name, sizeof conf_name);
         // A broken or missing .conf isn't fatal: the overlay shows why and
@@ -1276,27 +1276,27 @@ namespace ams {
         StartUdpLog();
         FlushEarlyLog();
         // Events arrive with the runtime lock held.
-        WgnxDriver *driver = wgnx_driver_new(engine, [](void *, const WgnxEvent *ev) {
-            if (ev->kind == WGNX_EVENT_RESOLVE) QueueResolve(*ev);
+        ZtnxDriver *driver = ztnx_driver_new(engine, [](void *, const ZtnxEvent *ev) {
+            if (ev->kind == ZTNX_EVENT_RESOLVE) QueueResolve(*ev);
             else Log("%s: %s (%u)", EventName(ev->kind), ev->text, ev->value);
             status::OnEvent(*ev);
         }, engine);
-        wgnx_driver_resolve_inline(driver, 0);  // lookups happen off the lock (ResolveOne)
+        ztnx_driver_resolve_inline(driver, 0);  // lookups happen off the lock (ResolveOne)
         if (cfg.overlay_budget_kb[0]) {
             // Bounded by the sysmodule's heap (heap_size.h): the engine and
             // the MITM need about 300 KB of it besides the overlay buffers.
             const unsigned long kb = std::clamp(std::strtoul(cfg.overlay_budget_kb, nullptr, 10), 128ul, 384ul);
-            wgnx_net_set_budget(engine, kb * 1024);
+            ztnx_net_set_budget(engine, kb * 1024);
             Log("overlay buffer budget: %lu KB", kb);
         }
-        const u16 listen_port = wgnx_engine_listen_port(engine);
-        if (wgnx_driver_open_udp(driver, listen_port) != 0 && wgnx_driver_open_udp(driver, 0) != 0) {
+        const u16 listen_port = ztnx_engine_listen_port(engine);
+        if (ztnx_driver_open_udp(driver, listen_port) != 0 && ztnx_driver_open_udp(driver, 0) != 0) {
             Log("no UDP socket (errno %d); not starting", errno);
             return;
         }
-        Log("udp: port %u%s", wgnx_driver_udp_port(driver), listen_port && wgnx_driver_udp_port(driver) != listen_port ? " (ListenPort was taken)" : "");
+        Log("udp: port %u%s", ztnx_driver_udp_port(driver), listen_port && ztnx_driver_udp_port(driver) != listen_port ? " (ListenPort was taken)" : "");
         std::string error;
-        auto rt = ::wgnx::Runtime::Adopt(engine, driver, &error);
+        auto rt = ::ztnx::Runtime::Adopt(engine, driver, &error);
         if (!rt) {
             Log("runtime: %s (errno %d)", error.c_str(), errno);
             return;
@@ -1337,7 +1337,7 @@ namespace ams {
 
         // Status for the overlay (and the user's pause switch, applied before
         // the engine loop's first round), then its control service.
-        status::Initialize(*rt, (mitm ? WGNX_CTL_FLAG_MITM : 0) | (g_hosts_on ? WGNX_CTL_FLAG_HOSTS : 0),
+        status::Initialize(*rt, (mitm ? ZTNX_CTL_FLAG_MITM : 0) | (g_hosts_on ? ZTNX_CTL_FLAG_HOSTS : 0),
                            std::strcmp(cfg.connect_notice, "off") != 0);
         ctl::Start(StopForOverlay, SetConfForOverlay);
 
@@ -1358,7 +1358,7 @@ namespace ams {
         }
         // The engine loop runs on core 2 when it can (see bsd_mitm::EngineCores).
         os::SetThreadCoreMask(os::GetCurrentThread(), bsd_mitm::PreferredCore, bsd_mitm::EngineCores);
-        rt->Run([&](WgnxDriver *d) {
+        rt->Run([&](ZtnxDriver *d) {
             const u64 now = armTicksToNs(armGetSystemTick());
             WatchBootMemory(now);
             // A round takes at most about a second (the poll timeout).
@@ -1367,8 +1367,8 @@ namespace ams {
             }
             g_last_round_ns = now;
             status::EngineRan(now);
-            static WgnxPeerInfo peers[WGNX_CTL_MAX_PEERS];  // 2.5 KB: static, not stack
-            status::SetPeers(peers, wgnx_engine_peers(engine, peers, WGNX_CTL_MAX_PEERS));
+            static ZtnxPeerInfo peers[ZTNX_CTL_MAX_PEERS];  // 2.5 KB: static, not stack
+            status::SetPeers(peers, ztnx_engine_peers(engine, peers, ZTNX_CTL_MAX_PEERS));
             ApplyResolved(engine);
             // Whole-heap use (Rust, C++, C), sampled every round; the Rust
             // peak below is exact.
@@ -1382,17 +1382,17 @@ namespace ams {
             if (now - last_heap_log > 60'000'000'000ull) {
                 last_heap_log = now;
                 size_t cur = 0, peak = 0;
-                wgnx_heap_stats(&cur, &peak);
+                ztnx_heap_stats(&cur, &peak);
                 Log("heap: rust %zu KB (peak %zu), all %zu KB (peak %zu, largest free %zu) of %zu KB; overlay buffers %zu KB", cur / 1024,
                     peak / 1024, (MallocBufferSize - std::min(heap_free, MallocBufferSize)) / 1024, heap_all_peak / 1024,
-                    init::GetAllocator()->GetAllocatableSize() / 1024, MallocBufferSize / 1024, wgnx_net_buffer_usage(engine) / 1024);
+                    init::GetAllocator()->GetAllocatableSize() / 1024, MallocBufferSize / 1024, ztnx_net_buffer_usage(engine) / 1024);
                 char classes[200];
-                wgnx_heap_classes(classes, sizeof classes);
+                ztnx_heap_classes(classes, sizeof classes);
                 Log("heap by size (KB/allocs): %s", classes);
                 stack_watch::Log();
             }
             int bsd_errno = 0;
-            if (const int b = wgnx_driver_batched_receive(d, &bsd_errno); b != batched) {
+            if (const int b = ztnx_driver_batched_receive(d, &bsd_errno); b != batched) {
                 batched = b;
                 if (b > 0) {
                     Log("udp: batched receive");
@@ -1414,7 +1414,7 @@ namespace ams {
                     Log("local address changed: %s", cur ? inet_ntoa(in_addr{cur}) : "(offline)");
                     ip = cur;
                     SetLocalNet(cur);
-                    if (cur) wgnx_engine_network_up(engine, wgnx_driver_now_ns());
+                    if (cur) ztnx_engine_network_up(engine, ztnx_driver_now_ns());
                 }
             }
         }, [&] {
@@ -1447,7 +1447,7 @@ namespace ams {
     // A crash in this process (libstratosphere's CrashHandler builds `ctx`
     // and calls this; the default reboots into the fatal screen). Log where
     // it happened, as offsets into our binary for addr2line, then end only
-    // this process: wireguard-nx stops but the console keeps running.
+    // this process: zerotier-nx stops but the console keeps running.
     // Runs on the one-page exception stack, maybe with the log mutex held,
     // so it formats into a static buffer and writes without locking.
     void ExceptionHandler(FatalErrorContext *ctx) {
@@ -1481,10 +1481,10 @@ namespace ams {
 
 }
 
-extern "C" [[noreturn]] void wgnx_platform_panic(const uint8_t *msg, size_t len) {
+extern "C" [[noreturn]] void ztnx_platform_panic(const uint8_t *msg, size_t len) {
     ams::g_log_defer_thread = nullptr;  // written now, with any lines still waiting
-    ams::Log("PANIC in wgnx core: %.*s", static_cast<int>(len), reinterpret_cast<const char *>(msg));
-    AMS_ABORT("wgnx core panic");
+    ams::Log("PANIC in ztnx core: %.*s", static_cast<int>(len), reinterpret_cast<const char *>(msg));
+    AMS_ABORT("ztnx core panic");
 }
 
 // libstratosphere routes operator new/delete through its allocator only when
@@ -1499,9 +1499,9 @@ void operator delete[](void *p) { std::free(p); }
 void operator delete[](void *p, size_t) { std::free(p); }
 
 // The shared C helpers' snprintf, routed to libstratosphere's formatter
-// (the sysmodule build defines snprintf=wgnx_snprintf): newlib's would add
+// (the sysmodule build defines snprintf=ztnx_snprintf): newlib's would add
 // its float formatting and stdio to the binary.
-extern "C" int wgnx_snprintf(char *dst, size_t size, const char *fmt, ...) {
+extern "C" int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...) {
     std::va_list vl;
     va_start(vl, fmt);
     const int n = ams::util::VSNPrintf(dst, size, fmt, vl);
@@ -1509,5 +1509,5 @@ extern "C" int wgnx_snprintf(char *dst, size_t size, const char *fmt, ...) {
     return n;
 }
 
-// Used by the shared app helpers (wgnx_app.c).
-extern "C" void wgnx_platform_random(uint8_t *buf, size_t len) { ams::os::GenerateRandomBytes(buf, len); }
+// Used by the shared app helpers (ztnx_app.c).
+extern "C" void ztnx_platform_random(uint8_t *buf, size_t len) { ams::os::GenerateRandomBytes(buf, len); }

@@ -15,8 +15,8 @@ namespace ams::hosts {
 
     namespace {
 
-        constexpr const char BeginMarker[] = "# >>> wireguard-nx: peer names, rewritten automatically; edit outside this block >>>\n";
-        constexpr const char EndMarker[] = "# <<< wireguard-nx <<<\n";
+        constexpr const char BeginMarker[] = "# >>> zerotier-nx: peer names, rewritten automatically; edit outside this block >>>\n";
+        constexpr const char EndMarker[] = "# <<< zerotier-nx <<<\n";
 
         // Atmosphère aborts (taking the console down) on a hosts file of
         // 32 KB or more, or a name of 512+ bytes; stay well clear of both.
@@ -138,20 +138,20 @@ namespace ams::hosts {
         // (VSock::AliasFor) and tells the socket layer about them. Never our
         // own address, a stand-in that collides with another or falls in a
         // tunnel route, or more than VSock::MaxAliases.
-        void Alias(WgnxEngine *engine, char *lines, size_t cap) {
+        void Alias(ZtnxEngine *engine, char *lines, size_t cap) {
             auto out = std::make_unique<char[]>(cap);
-            auto routes = std::make_unique<WgnxPrefix[]>(::wgnx::VSock::MaxRoutes);
-            const size_t n_routes = std::min(wgnx_engine_routes(engine, routes.get(), ::wgnx::VSock::MaxRoutes), ::wgnx::VSock::MaxRoutes);
-            WgnxPrefix own[4];
-            const size_t n_own = std::min<size_t>(wgnx_engine_addresses(engine, own, 4), 4);
-            auto in_prefix = [](u32 ip, const WgnxPrefix &p) {
+            auto routes = std::make_unique<ZtnxPrefix[]>(::ztnx::VSock::MaxRoutes);
+            const size_t n_routes = std::min(ztnx_engine_routes(engine, routes.get(), ::ztnx::VSock::MaxRoutes), ::ztnx::VSock::MaxRoutes);
+            ZtnxPrefix own[4];
+            const size_t n_own = std::min<size_t>(ztnx_engine_addresses(engine, own, 4), 4);
+            auto in_prefix = [](u32 ip, const ZtnxPrefix &p) {
                 if (p.family != 4 || p.len > 32) return false;
                 u32 net;
                 std::memcpy(std::addressof(net), p.ip, 4);
                 const u32 mask = p.len ? ~0u << (32 - p.len) : 0;
                 return (ip & mask) == (ntohl(net) & mask);
             };
-            ::wgnx::VSock::Alias aliases[::wgnx::VSock::MaxAliases];
+            ::ztnx::VSock::Alias aliases[::ztnx::VSock::MaxAliases];
             size_t n_aliases = 0, o = 0;
             for (const char *line = lines; *line && o + 1 < cap;) {
                 const char *eol = std::strchr(line, '\n');
@@ -163,7 +163,7 @@ namespace ams::hosts {
                 if (sp && static_cast<size_t>(sp - line) < sizeof ip_text) {
                     std::memcpy(ip_text, line, static_cast<size_t>(sp - line));
                     real.s_addr = inet_addr(ip_text);  // INADDR_NONE (a bad one) isn't private
-                    alias = ::wgnx::VSock::AliasFor(ntohl(real.s_addr));
+                    alias = ::ztnx::VSock::AliasFor(ntohl(real.s_addr));
                 }
                 for (size_t i = 0; alias && i < n_own; i++)
                     if (own[i].family == 4 && std::memcmp(own[i].ip, std::addressof(real.s_addr), 4) == 0) alias = 0;
@@ -171,7 +171,7 @@ namespace ams::hosts {
                     if (in_prefix(alias, routes[i])) alias = 0;
                 for (size_t i = 0; alias && i < n_aliases; i++)
                     if (aliases[i].alias == alias || aliases[i].real == ntohl(real.s_addr)) alias = 0;
-                if (n_aliases == ::wgnx::VSock::MaxAliases) alias = 0;
+                if (n_aliases == ::ztnx::VSock::MaxAliases) alias = 0;
                 int m;
                 if (alias) {
                     aliases[n_aliases++] = {alias, ntohl(real.s_addr)};
@@ -188,16 +188,16 @@ namespace ams::hosts {
             }
             out[o] = 0;
             std::memcpy(lines, out.get(), o + 1);
-            ::wgnx::VSock::SetAliases(aliases, n_aliases);
+            ::ztnx::VSock::SetAliases(aliases, n_aliases);
         }
 
     }
 
-    bool Collect(WgnxEngine *engine, bool aliases) {
+    bool Collect(ZtnxEngine *engine, bool aliases) {
         // Runs rarely: working buffers come from the heap, not static memory.
         auto lines = std::make_unique<char[]>(MaxBlock);
         auto block = std::make_unique<char[]>(MaxBlock);
-        wgnx_engine_hosts(engine, lines.get(), MaxBlock);
+        ztnx_engine_hosts(engine, lines.get(), MaxBlock);
         if (aliases) Alias(engine, lines.get(), MaxBlock);
         int count = 0;
         const size_t block_len = BuildBlock(lines.get(), block.get(), MaxBlock, std::addressof(count));

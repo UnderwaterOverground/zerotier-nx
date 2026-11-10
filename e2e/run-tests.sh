@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end tests against the local WireGuard peers (run setup.sh first).
-# Builds wgnx-host for Linux and runs it on the compose network next to them.
+# Builds ztnx-host for Linux and runs it on the compose network next to them.
 set -uo pipefail
 cd "$(dirname "$0")"
 SERVER_IP=10.7.0.1
@@ -10,10 +10,10 @@ pass() { printf '\033[32mPASS\033[0m %s\n' "$1"; }
 fail() { printf '\033[31mFAIL\033[0m %s\n' "$1"; fails=$((fails + 1)); }
 key() { awk -v n="$1" -v f="$2" '$1==n {print $f}' state/keys.txt; }  # f: 3 public
 
-docker compose build -q wgnx-build >/dev/null 2>&1
-docker compose run --rm -e CARGO_PROFILE_FLAG=--release -e RUST_PROFILE_DIR=release wgnx-build >/dev/null 2>&1 \
+docker compose build -q ztnx-build >/dev/null 2>&1
+docker compose run --rm -e CARGO_PROFILE_FLAG=--release -e RUST_PROFILE_DIR=release ztnx-build >/dev/null 2>&1 \
   || { echo "build failed"; exit 1; }
-wgnx() { docker compose run --rm -T wgnx "$@"; }
+ztnx() { docker compose run --rm -T ztnx "$@"; }
 peer() { docker compose exec -T peer "$@"; }
 # Seconds since the server's last handshake with a client (empty: never).
 handshake_age() {
@@ -31,18 +31,18 @@ wait_handshake() {  # client, timeout secs
 }
 bg() {  # name, args...: a client in the background
   local name=$1; shift
-  docker compose run --rm -T -d --name "wgnx-e2e-$name" wgnx "$@" >/dev/null
+  docker compose run --rm -T -d --name "ztnx-e2e-$name" ztnx "$@" >/dev/null
 }
-stop_bg() { docker rm -f "wgnx-e2e-$1" >/dev/null 2>&1; }
+stop_bg() { docker rm -f "ztnx-e2e-$1" >/dev/null 2>&1; }
 
 # 1. Outbound TCP+UDP echo after a handshake.
-if wgnx up --conf /state/client.conf --port 41641 --echo-test "$SERVER_IP" --expect-handshake >/tmp/wgnx-e2e-1.log 2>&1; then pass "echo + handshake"; else fail "echo + handshake (see /tmp/wgnx-e2e-1.log)"; fi
+if ztnx up --conf /state/client.conf --port 41641 --echo-test "$SERVER_IP" --expect-handshake >/tmp/ztnx-e2e-1.log 2>&1; then pass "echo + handshake"; else fail "echo + handshake (see /tmp/ztnx-e2e-1.log)"; fi
 
 # 2. Handshake retries: the server drops our packets for 20 s after we start.
-peer iptables -I INPUT -s 172.31.0.30 -p udp -j DROP
+peer iptables -I INPUT -s 172.31.2.30 -p udp -j DROP
 bg retry up --conf /state/roam.conf --port 41650
 sleep 20
-peer iptables -D INPUT -s 172.31.0.30 -p udp -j DROP
+peer iptables -D INPUT -s 172.31.2.30 -p udp -j DROP
 if wait_handshake roam 40; then pass "handshake retried after 20 s of loss"; else fail "handshake retried after 20 s of loss"; fi
 stop_bg retry
 
@@ -59,13 +59,13 @@ stop_bg keep
 # 4-6. Unmodified programs through the socket virtualization layer (the code
 # the Switch MITM uses), via LD_PRELOAD.
 preload() {  # conf-name, command
-  docker compose run --rm -T -e WGNX_CONF="/state/$1.conf" -e WGNX_PORT=41642 -e WGNX_WAIT_READY=1 \
-    -e LD_PRELOAD=/src/target/linux/libwgnx_interpose.so --entrypoint sh wgnx -c "$2"
+  docker compose run --rm -T -e ZTNX_CONF="/state/$1.conf" -e ZTNX_PORT=41642 -e ZTNX_WAIT_READY=1 \
+    -e LD_PRELOAD=/src/target/linux/libztnx_interpose.so --entrypoint sh ztnx -c "$2"
 }
-if preload preload "/src/target/linux/vsock-test $SERVER_IP 172.31.0.20:8080 10.7.0.3" >/tmp/wgnx-e2e-4.log 2>&1; then
+if preload preload "/src/target/linux/vsock-test $SERVER_IP 172.31.2.20:8080 10.7.0.3" >/tmp/ztnx-e2e-4.log 2>&1; then
   pass "socket virtualization suite (vsock-test)"
 else
-  fail "socket virtualization suite (see /tmp/wgnx-e2e-4.log)"
+  fail "socket virtualization suite (see /tmp/ztnx-e2e-4.log)"
 fi
 if preload preload "curl -s -m 10 http://$SERVER_IP:8080/" 2>/dev/null | grep -q "<html"; then pass "unmodified curl through the tunnel"; else fail "unmodified curl"; fi
 udp=$(preload preload "iperf3 -c $SERVER_IP -u -b 50M -l 1200 -t 4 -R -f m 2>&1 | grep receiver" 2>/dev/null)
@@ -75,8 +75,8 @@ tcp=$(preload preload "iperf3 -c $SERVER_IP -t 3 -f m 2>&1 | grep receiver" 2>/d
 if awk "BEGIN{exit !(${tcp:-0} >= 100)}"; then pass "TCP bulk upload (got ${tcp} Mbit/s)"; else fail "TCP bulk upload (got ${tcp:-none})"; fi
 
 # 7. Inbound connections: nothing filters them (WireGuard has no ACLs).
-docker compose run --rm -T -d --name wgnx-e2e-listen -e WGNX_CONF=/state/preload.conf -e WGNX_PORT=41642 \
-  -e WGNX_WAIT_READY=1 -e LD_PRELOAD=/src/target/linux/libwgnx_interpose.so --entrypoint python3 wgnx -c '
+docker compose run --rm -T -d --name ztnx-e2e-listen -e ZTNX_CONF=/state/preload.conf -e ZTNX_PORT=41642 \
+  -e ZTNX_WAIT_READY=1 -e LD_PRELOAD=/src/target/linux/libztnx_interpose.so --entrypoint python3 ztnx -c '
 import socket, time
 s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("0.0.0.0", 7777)); s.listen(5)
 while True: time.sleep(1)' >/dev/null
@@ -90,24 +90,24 @@ if preload preload "curl -s -m 10 http://10.123.0.1:8080/" 2>/dev/null | grep -q
 if ! preload nosubnet "curl -s -m 5 http://10.123.0.1:8080/" 2>/dev/null | grep -q "<html"; then pass "subnet absent without AllowedIPs"; else fail "subnet absent without AllowedIPs"; fi
 
 # 9. Pre-shared keys: the right one works, a wrong one never handshakes.
-if wgnx up --conf /state/psk.conf --port 41644 --echo-test "$SERVER_IP" --expect-handshake >/tmp/wgnx-e2e-9.log 2>&1; then pass "preshared key"; else fail "preshared key (see /tmp/wgnx-e2e-9.log)"; fi
-if ! wgnx up --conf /state/badpsk.conf --port 41644 --expect-handshake --duration 15 >/dev/null 2>&1; then pass "wrong preshared key refused"; else fail "wrong preshared key refused"; fi
+if ztnx up --conf /state/psk.conf --port 41644 --echo-test "$SERVER_IP" --expect-handshake >/tmp/ztnx-e2e-9.log 2>&1; then pass "preshared key"; else fail "preshared key (see /tmp/ztnx-e2e-9.log)"; fi
+if ! ztnx up --conf /state/badpsk.conf --port 41644 --expect-handshake --duration 15 >/dev/null 2>&1; then pass "wrong preshared key refused"; else fail "wrong preshared key refused"; fi
 
 # 10. A host-name endpoint that only resolves later (the engine re-resolves
 # every 30 s while there is no handshake).
 bg dns up --conf /state/dns.conf --port 41645
 sleep 5
-docker exec wgnx-e2e-dns sh -c 'echo "172.31.0.20 wg-server-later" >> /etc/hosts'
+docker exec ztnx-e2e-dns sh -c 'echo "172.31.2.20 wg-server-later" >> /etc/hosts'
 if wait_handshake dns 60; then pass "host-name endpoint resolved later"; else fail "host-name endpoint resolved later"; fi
 stop_bg dns
 
 # 11. Roaming: the server follows us to a new port.
-wgnx up --conf /state/roam.conf --port 41650 --echo-test "$SERVER_IP" >/dev/null 2>&1
-if wgnx up --conf /state/roam.conf --port 41651 --echo-test "$SERVER_IP" >/dev/null 2>&1 \
-   && peer wg show wg0 endpoints | grep -q "$(key roam 3).*172.31.0.30:41651"; then pass "roaming to a new port"; else fail "roaming to a new port"; fi
+ztnx up --conf /state/roam.conf --port 41650 --echo-test "$SERVER_IP" >/dev/null 2>&1
+if ztnx up --conf /state/roam.conf --port 41651 --echo-test "$SERVER_IP" >/dev/null 2>&1 \
+   && peer wg show wg0 endpoints | grep -q "$(key roam 3).*172.31.2.30:41651"; then pass "roaming to a new port"; else fail "roaming to a new port"; fi
 
 # 12. Several peers: echo reaches the second server too.
-if wgnx up --conf /state/client.conf --port 41646 --echo-test "$PEER2_IP" >/dev/null 2>&1; then pass "second peer"; else fail "second peer"; fi
+if ztnx up --conf /state/client.conf --port 41646 --echo-test "$PEER2_IP" >/dev/null 2>&1; then pass "second peer"; else fail "second peer"; fi
 
 # 13. No Endpoint: the server's keepalive finds us.
 bg noep up --conf /state/noep.conf --port 41649
@@ -115,24 +115,24 @@ if wait_handshake noep 20 && peer ping -c 3 -W 2 10.7.0.7 >/dev/null; then pass 
 stop_bg noep
 
 # 14. A broken conf: a clear error, and the shim stays out of the way.
-if { wgnx check --conf /state/bad.conf 2>&1 || true; } | grep -q "line 2"; then pass "config error names the line"; else fail "config error names the line"; fi
-if preload bad "curl -s -m 10 http://172.31.0.20:8080/" 2>/dev/null | grep -q "<html"; then pass "shim disabled on a bad conf"; else fail "shim disabled on a bad conf"; fi
+if { ztnx check --conf /state/bad.conf 2>&1 || true; } | grep -q "line 2"; then pass "config error names the line"; else fail "config error names the line"; fi
+if preload bad "curl -s -m 10 http://172.31.2.20:8080/" 2>/dev/null | grep -q "<html"; then pass "shim disabled on a bad conf"; else fail "shim disabled on a bad conf"; fi
 
 # 15. Sleep and wake (the console's path): echo again within 3 s of resuming.
-if docker compose run --rm -T --entrypoint /src/target/linux/wgnx-c wgnx --conf /state/client.conf --port 41652 \
-     --echo-test "$SERVER_IP" --sleep-test >/tmp/wgnx-e2e-15.log 2>&1; then pass "echo after suspend/resume ($(grep -o 'in [0-9.]* s' /tmp/wgnx-e2e-15.log))"; else fail "echo after suspend/resume (see /tmp/wgnx-e2e-15.log)"; fi
+if docker compose run --rm -T --entrypoint /src/target/linux/ztnx-c ztnx --conf /state/client.conf --port 41652 \
+     --echo-test "$SERVER_IP" --sleep-test >/tmp/ztnx-e2e-15.log 2>&1; then pass "echo after suspend/resume ($(grep -o 'in [0-9.]* s' /tmp/ztnx-e2e-15.log))"; else fail "echo after suspend/resume (see /tmp/ztnx-e2e-15.log)"; fi
 
 # 16. AmneziaWG: junk, padded handshakes and disguised headers against a
 # real amneziawg-go; the same keys without the obfuscation get nowhere.
 AWG_IP=10.7.1.1
-if wgnx up --conf /state/awgclient.conf --port 41653 --echo-test "$AWG_IP" --expect-handshake >/tmp/wgnx-e2e-16.log 2>&1; then pass "AmneziaWG echo + handshake"; else fail "AmneziaWG echo + handshake (see /tmp/wgnx-e2e-16.log)"; fi
-if ! wgnx up --conf /state/awg-plain.conf --port 41653 --expect-handshake --duration 15 >/dev/null 2>&1; then pass "plain WireGuard refused by the AmneziaWG server"; else fail "plain WireGuard refused by the AmneziaWG server"; fi
+if ztnx up --conf /state/awgclient.conf --port 41653 --echo-test "$AWG_IP" --expect-handshake >/tmp/ztnx-e2e-16.log 2>&1; then pass "AmneziaWG echo + handshake"; else fail "AmneziaWG echo + handshake (see /tmp/ztnx-e2e-16.log)"; fi
+if ! ztnx up --conf /state/awg-plain.conf --port 41653 --expect-handshake --duration 15 >/dev/null 2>&1; then pass "plain WireGuard refused by the AmneziaWG server"; else fail "plain WireGuard refused by the AmneziaWG server"; fi
 
 # 17. AmneziaWG 3 header protection: the same again with every header
 # encrypted, at full speed; the same parameters minus the key get nowhere.
 HP_IP=10.7.2.1
-if wgnx up --conf /state/awghp.conf --port 41654 --echo-test "$HP_IP" --expect-handshake >/tmp/wgnx-e2e-17.log 2>&1; then pass "AmneziaWG header protection echo + handshake"; else fail "AmneziaWG header protection echo + handshake (see /tmp/wgnx-e2e-17.log)"; fi
-if ! wgnx up --conf /state/awghp-nokey.conf --port 41654 --expect-handshake --duration 15 >/dev/null 2>&1; then pass "header protection: no key, no handshake"; else fail "header protection: no key, no handshake"; fi
+if ztnx up --conf /state/awghp.conf --port 41654 --echo-test "$HP_IP" --expect-handshake >/tmp/ztnx-e2e-17.log 2>&1; then pass "AmneziaWG header protection echo + handshake"; else fail "AmneziaWG header protection echo + handshake (see /tmp/ztnx-e2e-17.log)"; fi
+if ! ztnx up --conf /state/awghp-nokey.conf --port 41654 --expect-handshake --duration 15 >/dev/null 2>&1; then pass "header protection: no key, no handshake"; else fail "header protection: no key, no handshake"; fi
 udp=$(preload awghp "iperf3 -c $HP_IP -u -b 50M -l 1200 -t 4 -R -f m 2>&1 | grep receiver" 2>/dev/null)
 mbps=$(echo "$udp" | awk '{for (i=1;i<=NF;i++) if ($i=="Mbits/sec") print $(i-1)}')
 if awk "BEGIN{exit !(${mbps:-0} >= 47)}"; then pass "UDP 50 Mbit/s through header protection (got ${mbps} Mbit/s)"; else fail "UDP 50 Mbit/s through header protection (got ${mbps:-none})"; fi

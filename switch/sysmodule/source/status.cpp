@@ -13,26 +13,26 @@ namespace ams::status {
 
     namespace {
 
-        constexpr const char PausedPath[] = "sdmc:/config/wireguard-nx/paused";
+        constexpr const char PausedPath[] = "sdmc:/config/zerotier-nx/paused";
         // Ultrahand shows a toast for each .notify file here (and only if it
         // is installed: we never create the directory).
         constexpr const char NotifyDir[] = "sdmc:/config/ultrahand/notifications";
-        constexpr const char ConnectedNotifyPath[] = "sdmc:/config/ultrahand/notifications/wireguard-nx-connected.notify";
-        constexpr const char UpdateNotifyPath[] = "sdmc:/config/ultrahand/notifications/wireguard-nx-update.notify";
-        constexpr const char MemoryNotifyPath[] = "sdmc:/config/ultrahand/notifications/wireguard-nx-memory.notify";
-        constexpr const char ConfigNotifyPath[] = "sdmc:/config/ultrahand/notifications/wireguard-nx-config.notify";
+        constexpr const char ConnectedNotifyPath[] = "sdmc:/config/ultrahand/notifications/zerotier-nx-connected.notify";
+        constexpr const char UpdateNotifyPath[] = "sdmc:/config/ultrahand/notifications/zerotier-nx-update.notify";
+        constexpr const char MemoryNotifyPath[] = "sdmc:/config/ultrahand/notifications/zerotier-nx-memory.notify";
+        constexpr const char ConfigNotifyPath[] = "sdmc:/config/ultrahand/notifications/zerotier-nx-config.notify";
         // Config problems show at boot, often before anyone looks at the
         // screen, and say what to do: long enough to read and act on.
         constexpr u32 ConfigToastMs = 20000;
         // The overlay's "Connection notice" switch: present = off.
-        constexpr const char NoNoticePath[] = "sdmc:/config/wireguard-nx/no-connect-notice";
+        constexpr const char NoNoticePath[] = "sdmc:/config/zerotier-nx/no-connect-notice";
 
         constinit os::SdkMutex g_mutex;
-        constinit ::wgnx::Runtime *g_runtime = nullptr;
-        constinit WgnxCtlStatus g_status = {};
+        constinit ::ztnx::Runtime *g_runtime = nullptr;
+        constinit ZtnxCtlStatus g_status = {};
         constinit char g_last_error[192] = {};
-        constinit char g_conf_name[WGNX_CTL_CONF_NAME_MAX] = {};
-        constinit WgnxPeerInfo g_peers[WGNX_CTL_MAX_PEERS] = {};
+        constinit char g_conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
+        constinit ZtnxPeerInfo g_peers[ZTNX_CTL_MAX_PEERS] = {};
         constinit size_t g_peer_count = 0;  // in g_peers
         constinit size_t g_peer_total = 0;  // configured, including any that didn't fit
         constinit bool g_handshaken = false;  // a handshake since the conf was applied
@@ -81,12 +81,12 @@ namespace ams::status {
         // First connection since boot: a short toast with our address. Not on
         // later reconnects (every wake would show it). g_mutex held.
         void AnnounceConnected() {
-            if (g_announced_connected || g_status.state != WGNX_CTL_CONNECTED) return;
+            if (g_announced_connected || g_status.state != ZTNX_CTL_CONNECTED) return;
             g_announced_connected = true;
             if (!g_connect_notice || Exists(NoNoticePath, fs::DirectoryEntryType_File)) return;
             char text[48];
             util::SNPrintf(text, sizeof text, "Connected. IP: %u.%u.%u.%u", g_status.ipv4[0], g_status.ipv4[1], g_status.ipv4[2], g_status.ipv4[3]);
-            Toast(ConnectedNotifyPath, "WireGuard", text, 5000);
+            Toast(ConnectedNotifyPath, "ZeroTier", text, 5000);
         }
 
         // Errors go into JSON and the overlay: keep them to plain printable
@@ -102,23 +102,23 @@ namespace ams::status {
 
         // The state while the tunnel is meant to be running (g_mutex held).
         u32 RunningState() {
-            return g_handshaken ? WGNX_CTL_CONNECTED : WGNX_CTL_CONNECTING;
+            return g_handshaken ? ZTNX_CTL_CONNECTED : ZTNX_CTL_CONNECTING;
         }
 
     }
 
-    void Initialize(::wgnx::Runtime &rt, u32 flags, bool connect_notice) {
+    void Initialize(::ztnx::Runtime &rt, u32 flags, bool connect_notice) {
         std::scoped_lock lk(g_mutex);
         g_runtime = std::addressof(rt);
         g_connect_notice = connect_notice;
-        g_status.version = WGNX_CTL_VERSION;
+        g_status.version = ZTNX_CTL_VERSION;
         g_status.flags |= flags;
         if (Exists(PausedPath, fs::DirectoryEntryType_File)) {
             g_paused = true;
-            g_status.state = WGNX_CTL_PAUSED;
-            rt.StartSuspended(::wgnx::Runtime::kPaused);
+            g_status.state = ZTNX_CTL_PAUSED;
+            rt.StartSuspended(::ztnx::Runtime::kPaused);
             Log("status: paused (delete %s or use the overlay to resume)", PausedPath);
-        } else if (g_status.state == WGNX_CTL_STARTING && !(g_status.flags & WGNX_CTL_FLAG_CONF_ERROR)) {
+        } else if (g_status.state == ZTNX_CTL_STARTING && !(g_status.flags & ZTNX_CTL_FLAG_CONF_ERROR)) {
             g_status.state = RunningState();
         }
     }
@@ -128,18 +128,18 @@ namespace ams::status {
         util::SNPrintf(g_conf_name, sizeof g_conf_name, "%s", name);
         g_status.peers = peers;
         g_status.peers_up = 0;
-        g_status.flags &= ~static_cast<u32>(WGNX_CTL_FLAG_CONF_ERROR | WGNX_CTL_FLAG_CONF_MISSING);
+        g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_CONF_ERROR | ZTNX_CTL_FLAG_CONF_MISSING);
         g_last_error[0] = 0;
         g_handshaken = false;
         g_peer_count = g_peer_total = 0;
-        if (g_runtime && !g_paused && g_status.state != WGNX_CTL_STOPPING) g_status.state = WGNX_CTL_CONNECTING;
+        if (g_runtime && !g_paused && g_status.state != ZTNX_CTL_STOPPING) g_status.state = ZTNX_CTL_CONNECTING;
     }
 
     void SetConfError(const char *name, const char *error) {
         {
             std::scoped_lock lk(g_mutex);
-            g_status.flags |= WGNX_CTL_FLAG_CONF_ERROR;
-            g_status.flags &= ~static_cast<u32>(WGNX_CTL_FLAG_CONF_MISSING);
+            g_status.flags |= ZTNX_CTL_FLAG_CONF_ERROR;
+            g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_CONF_MISSING);
             char msg[192];
             util::SNPrintf(msg, sizeof msg, "%s: %s", name, error);
             CopySafe(g_last_error, sizeof g_last_error, msg);
@@ -147,24 +147,24 @@ namespace ams::status {
         }
         char text[220];
         util::SNPrintf(text, sizeof text, "%s", g_last_error);
-        Toast(ConfigNotifyPath, "WireGuard: config error", text, ConfigToastMs);
+        Toast(ConfigNotifyPath, "ZeroTier: config error", text, ConfigToastMs);
     }
 
     void SetConfMissing(const char *message) {
         {
             std::scoped_lock lk(g_mutex);
-            g_status.flags |= WGNX_CTL_FLAG_CONF_ERROR | WGNX_CTL_FLAG_CONF_MISSING;
+            g_status.flags |= ZTNX_CTL_FLAG_CONF_ERROR | ZTNX_CTL_FLAG_CONF_MISSING;
             CopySafe(g_last_error, sizeof g_last_error, message);
         }
         char text[220];
         util::SNPrintf(text, sizeof text, "%s", g_last_error);
-        Toast(ConfigNotifyPath, "WireGuard: no config", text, ConfigToastMs);
+        Toast(ConfigNotifyPath, "ZeroTier: no config", text, ConfigToastMs);
     }
 
-    void OnEvent(const WgnxEvent &ev) {
+    void OnEvent(const ZtnxEvent &ev) {
         std::scoped_lock lk(g_mutex);
         switch (ev.kind) {
-            case WGNX_EVENT_ADDRESSES: {
+            case ZTNX_EVENT_ADDRESSES: {
                 u32 a = 0, b = 0, c = 0, d = 0;
                 const char *p = ev.text;
                 auto num = [&p](u32 *out) {
@@ -179,10 +179,10 @@ namespace ams::status {
                 }
                 break;
             }
-            case WGNX_EVENT_PEERS:
+            case ZTNX_EVENT_PEERS:
                 g_status.peers = ev.value;
                 break;
-            case WGNX_EVENT_ERROR:
+            case ZTNX_EVENT_ERROR:
                 CopySafe(g_last_error, sizeof g_last_error, ev.text);
                 break;
             default:
@@ -190,21 +190,21 @@ namespace ams::status {
         }
     }
 
-    void SetPeers(const WgnxPeerInfo *peers, size_t n) {
+    void SetPeers(const ZtnxPeerInfo *peers, size_t n) {
         std::scoped_lock lk(g_mutex);
         g_peer_total = n;
-        g_peer_count = std::min(n, static_cast<size_t>(WGNX_CTL_MAX_PEERS));
+        g_peer_count = std::min(n, static_cast<size_t>(ZTNX_CTL_MAX_PEERS));
         u32 up = 0;
         for (size_t i = 0; i < g_peer_count; i++) {
             g_peers[i] = peers[i];
             g_peers[i].name[sizeof g_peers[i].name - 1] = 0;
-            if (peers[i].flags & WGNX_PEER_SESSION) up++;
+            if (peers[i].flags & ZTNX_PEER_SESSION) up++;
         }
         g_status.peers_up = up;
         if (up > 0 && !g_handshaken) {
             g_handshaken = true;
-            if (!g_paused && g_status.state != WGNX_CTL_STOPPING) {
-                g_status.state = WGNX_CTL_CONNECTED;
+            if (!g_paused && g_status.state != ZTNX_CTL_STOPPING) {
+                g_status.state = ZTNX_CTL_CONNECTED;
                 AnnounceConnected();
             }
         }
@@ -212,19 +212,19 @@ namespace ams::status {
 
     void AnnounceUpdate(const char *latest) {
         char text[96];
-        util::SNPrintf(text, sizeof text, "wireguard-nx %s is out (you have %s).", latest, wgnx_version());
-        Toast(UpdateNotifyPath, "WireGuard: update available", text, 10000);
+        util::SNPrintf(text, sizeof text, "zerotier-nx %s is out (you have %s).", latest, ztnx_version());
+        Toast(UpdateNotifyPath, "ZeroTier: update available", text, 10000);
     }
 
     void AnnounceLowMemory(u32 free_kb) {
         char text[128];
         util::SNPrintf(text, sizeof text, "Only %u KB was free after boot. If the Switch crashes (2001-0132), turn off a sysmodule.",
                        static_cast<unsigned>(free_kb));
-        Toast(MemoryNotifyPath, "WireGuard: low system memory", text, 10000);
+        Toast(MemoryNotifyPath, "ZeroTier: low system memory", text, 10000);
     }
 
-    WgnxCtlStatus Get() {
-        WgnxCtlStatus s;
+    ZtnxCtlStatus Get() {
+        ZtnxCtlStatus s;
         {
             std::scoped_lock lk(g_mutex);
             s = g_status;
@@ -238,12 +238,12 @@ namespace ams::status {
         // Suspended (the console dozing or asleep, or paused) isn't stuck:
         // the loop is meant to be idle. Resuming counts as a round.
         const bool suspended = g_runtime && g_runtime->IsSuspended();
-        if (idle_s >= 3 && !suspended && s.state != WGNX_CTL_PAUSED && s.state != WGNX_CTL_STOPPING) s.engine_stalled_s = static_cast<u32>(idle_s);
+        if (idle_s >= 3 && !suspended && s.state != ZTNX_CTL_PAUSED && s.state != ZTNX_CTL_STOPPING) s.engine_stalled_s = static_cast<u32>(idle_s);
         // A stuck loop can't log where it is: say it from here (the overlay
         // asks twice a second while it's open).
         if (s.engine_stalled_s >= 10 && !g_stall_logged.exchange(true)) {
             const char *step = g_engine_step;
-            const char *driver = wgnx_driver_step();
+            const char *driver = ztnx_driver_step();
             Log("engine loop stuck for %u s, in: %s (driver's last step: %s)", s.engine_stalled_s, step ? step : "the engine",
                 driver ? driver : "none");
         }
@@ -264,8 +264,8 @@ namespace ams::status {
 
     void SetOffline(bool offline) {
         std::scoped_lock lk(g_mutex);
-        if (offline) g_status.flags |= WGNX_CTL_FLAG_OFFLINE;
-        else g_status.flags &= ~static_cast<u32>(WGNX_CTL_FLAG_OFFLINE);
+        if (offline) g_status.flags |= ZTNX_CTL_FLAG_OFFLINE;
+        else g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_OFFLINE);
     }
 
     size_t GetLastError(char *out, size_t cap) {
@@ -278,7 +278,7 @@ namespace ams::status {
         return static_cast<size_t>(util::SNPrintf(out, cap, "%s", g_conf_name));
     }
 
-    size_t GetPeers(WgnxPeerInfo *out, size_t max) {
+    size_t GetPeers(ZtnxPeerInfo *out, size_t max) {
         std::scoped_lock lk(g_mutex);
         std::memcpy(out, g_peers, std::min(g_peer_count, max) * sizeof *out);
         return g_peer_total;
@@ -290,28 +290,28 @@ namespace ams::status {
 
     bool IsConnected() {
         std::scoped_lock lk(g_mutex);
-        return g_status.state == WGNX_CTL_CONNECTED;
+        return g_status.state == ZTNX_CTL_CONNECTED;
     }
 
     bool IsStopping() {
         std::scoped_lock lk(g_mutex);
-        return g_status.state == WGNX_CTL_STOPPING;
+        return g_status.state == ZTNX_CTL_STOPPING;
     }
 
     void SetStopping() {
         std::scoped_lock lk(g_mutex);
-        g_status.state = WGNX_CTL_STOPPING;
+        g_status.state = ZTNX_CTL_STOPPING;
     }
 
     void SetPaused(bool paused) {
-        ::wgnx::Runtime *rt;
+        ::ztnx::Runtime *rt;
         {
             std::scoped_lock lk(g_mutex);
-            if (g_paused == paused || !g_runtime || g_status.state == WGNX_CTL_STOPPING) return;
+            if (g_paused == paused || !g_runtime || g_status.state == ZTNX_CTL_STOPPING) return;
             g_paused = paused;
             rt = g_runtime;
             if (paused) {
-                g_status.state = WGNX_CTL_PAUSED;
+                g_status.state = ZTNX_CTL_PAUSED;
                 WriteFile(PausedPath, "1", 1);
             } else {
                 g_status.state = RunningState();
@@ -320,12 +320,12 @@ namespace ams::status {
                 g_engine_ran_ns = NowNs();
             }
         }
-        // Without waiting for the engine loop: wgnx:ctl must always answer,
+        // Without waiting for the engine loop: ztnx:ctl must always answer,
         // even while the loop is busy or stuck. Homebrew's tunnel sockets
         // fail at once anyway (bsd_mitm checks IsPaused), and the loop
         // closes or reopens the engine's own within a second.
-        rt->RequestSuspended(::wgnx::Runtime::kPaused, paused);
-        Log("status: WireGuard %s", paused ? "paused" : "resumed");
+        rt->RequestSuspended(::ztnx::Runtime::kPaused, paused);
+        Log("status: ZeroTier %s", paused ? "paused" : "resumed");
     }
 
 }

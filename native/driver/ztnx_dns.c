@@ -1,5 +1,5 @@
-// See wgnx_dns.h.
-#include "wgnx_dns.h"
+// See ztnx_dns.h.
+#include "ztnx_dns.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -22,11 +22,11 @@ static int resolve_getaddrinfo(const char *host, uint32_t *out) {
     return 0;
 }
 
-static wgnx_resolver_fn g_resolver = resolve_getaddrinfo;
+static ztnx_resolver_fn g_resolver = resolve_getaddrinfo;
 
-void wgnx_set_resolver(wgnx_resolver_fn fn) { g_resolver = fn ? fn : resolve_getaddrinfo; }
+void ztnx_set_resolver(ztnx_resolver_fn fn) { g_resolver = fn ? fn : resolve_getaddrinfo; }
 
-int wgnx_resolve_ipv4(const char *host, uint32_t *out) {
+int ztnx_resolve_ipv4(const char *host, uint32_t *out) {
     struct in_addr a;
     if (inet_pton(AF_INET, host, &a) == 1) {
         *out = a.s_addr;
@@ -35,7 +35,7 @@ int wgnx_resolve_ipv4(const char *host, uint32_t *out) {
     return g_resolver(host, out);
 }
 
-int wgnx_dns_query_a(uint32_t server_be, const char *host, uint32_t *out, int timeout_ms) {
+int ztnx_dns_query_a(uint32_t server_be, const char *host, uint32_t *out, int timeout_ms) {
     // Header: id, flags (recursion desired), 1 question.
     unsigned char q[300];
     size_t n = 0;

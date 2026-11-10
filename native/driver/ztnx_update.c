@@ -1,5 +1,5 @@
-// See wgnx_update.h.
-#include "wgnx_update.h"
+// See ztnx_update.h.
+#include "ztnx_update.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -13,20 +13,20 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "wgnx.h"
-#include "wgnx_dns.h"
+#include "ztnx.h"
+#include "ztnx_dns.h"
 
-#ifdef WGNX_NO_STDIO
+#ifdef ZTNX_NO_STDIO
 // Builds without newlib's printf (the sysmodule) supply this instead.
-int wgnx_snprintf(char *dst, size_t size, const char *fmt, ...);
-#define snprintf wgnx_snprintf
+int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...);
+#define snprintf ztnx_snprintf
 #endif
 
-#define HOST WGNX_UPDATE_HOST
+#define HOST ZTNX_UPDATE_HOST
 
-struct WgnxUpdate {
+struct ZtnxUpdate {
     int fd;
-    WgnxTls *tls;
+    ZtnxTls *tls;
     int connecting;
     int result;
     uint64_t deadline_ns;
@@ -39,28 +39,28 @@ struct WgnxUpdate {
     size_t head_len;
 };
 
-static int fail(WgnxUpdate *u, const char *what, const char *detail) {
+static int fail(ZtnxUpdate *u, const char *what, const char *detail) {
     snprintf(u->error, sizeof u->error, "%s%s%s", what, detail ? ": " : "", detail ? detail : "");
-    u->result = WGNX_UPDATE_FAILED;
+    u->result = ZTNX_UPDATE_FAILED;
     return u->result;
 }
 
 // No strerror: its message table would grow the sysmodule.
-static int fail_errno(WgnxUpdate *u, const char *what, int err) {
+static int fail_errno(ZtnxUpdate *u, const char *what, int err) {
     char detail[24];
     snprintf(detail, sizeof detail, "errno %d", err);
     return fail(u, what, detail);
 }
 
-WgnxUpdate *wgnx_update_start(const char *repo, const char *current, uint64_t now_ns, uint32_t timeout_ms) {
-    WgnxUpdate *u = (WgnxUpdate *)calloc(1, sizeof *u);
+ZtnxUpdate *ztnx_update_start(const char *repo, const char *current, uint64_t now_ns, uint32_t timeout_ms) {
+    ZtnxUpdate *u = (ZtnxUpdate *)calloc(1, sizeof *u);
     if (!u) return NULL;
     u->fd = -1;
     u->deadline_ns = now_ns + (uint64_t)timeout_ms * 1000000ull;
     snprintf(u->current, sizeof u->current, "%s", current);
 
     uint32_t ip;
-    if (wgnx_resolve_ipv4(HOST, &ip) != 0) {
+    if (ztnx_resolve_ipv4(HOST, &ip) != 0) {
         fail(u, "cannot resolve " HOST, NULL);
         return u;
     }
@@ -84,7 +84,7 @@ WgnxUpdate *wgnx_update_start(const char *repo, const char *current, uint64_t no
     }
     u->connecting = 1;
 
-    u->tls = wgnx_tls_new(HOST);
+    u->tls = ztnx_tls_new(HOST);
     if (!u->tls) {
         fail(u, "TLS setup failed", NULL);
         return u;
@@ -94,10 +94,10 @@ WgnxUpdate *wgnx_update_start(const char *repo, const char *current, uint64_t no
     const int n = snprintf(req, sizeof req,
                            "GET /%s/releases/latest HTTP/1.1\r\n"
                            "Host: " HOST "\r\n"
-                           "User-Agent: wireguard-nx/%s\r\n"
+                           "User-Agent: zerotier-nx/%s\r\n"
                            "Connection: close\r\n\r\n",
                            repo, current);
-    if (n <= 0 || (size_t)n >= sizeof req || wgnx_tls_write(u->tls, (const uint8_t *)req, (size_t)n) != 0) {
+    if (n <= 0 || (size_t)n >= sizeof req || ztnx_tls_write(u->tls, (const uint8_t *)req, (size_t)n) != 0) {
         fail(u, "TLS write failed", NULL);
     }
     return u;
@@ -113,7 +113,7 @@ static const char *find_header(const char *head, const char *name) {
 }
 
 // The head is complete (or as much as we keep): read the redirect.
-static int parse_head(WgnxUpdate *u) {
+static int parse_head(ZtnxUpdate *u) {
     if (strncmp(u->head, "HTTP/1.1 302", 12) != 0 && strncmp(u->head, "HTTP/1.0 302", 12) != 0) {
         const char *eol = strstr(u->head, "\r\n");
         char status[40];
@@ -135,17 +135,17 @@ static int parse_head(WgnxUpdate *u) {
     }
     u->latest[n] = 0;
     if (n == 0 || u->latest[0] < '0' || u->latest[0] > '9') return fail(u, "unexpected release tag", NULL);
-    u->result = wgnx_version_compare(u->latest, u->current) > 0 ? WGNX_UPDATE_NEWER : WGNX_UPDATE_CURRENT;
+    u->result = ztnx_version_compare(u->latest, u->current) > 0 ? ZTNX_UPDATE_NEWER : ZTNX_UPDATE_CURRENT;
     return u->result;
 }
 
-int wgnx_update_step(WgnxUpdate *u, uint64_t now_ns) {
-    if (u->result != WGNX_UPDATE_PENDING) return u->result;
+int ztnx_update_step(ZtnxUpdate *u, uint64_t now_ns) {
+    if (u->result != ZTNX_UPDATE_PENDING) return u->result;
     if (now_ns > u->deadline_ns) return fail(u, "timed out", NULL);
 
     if (u->connecting) {
         struct pollfd pfd = {u->fd, POLLOUT, 0};
-        if (poll(&pfd, 1, 0) <= 0) return WGNX_UPDATE_PENDING;
+        if (poll(&pfd, 1, 0) <= 0) return ZTNX_UPDATE_PENDING;
         int err = 0;
         socklen_t len = sizeof err;
         if (getsockopt(u->fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0) err = errno;
@@ -159,7 +159,7 @@ int wgnx_update_step(WgnxUpdate *u, uint64_t now_ns) {
         for (;;) {
             if (u->out_off == u->out_len) {
                 u->out_off = 0;
-                u->out_len = wgnx_tls_take_outgoing(u->tls, u->out, sizeof u->out);
+                u->out_len = ztnx_tls_take_outgoing(u->tls, u->out, sizeof u->out);
                 if (u->out_len == 0) break;
             }
             const ssize_t n = send(u->fd, u->out + u->out_off, u->out_len - u->out_off, 0);
@@ -173,34 +173,34 @@ int wgnx_update_step(WgnxUpdate *u, uint64_t now_ns) {
         if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return fail_errno(u, "recv", errno);
         if (got > 0) {
             progressed = 1;
-            if (wgnx_tls_feed(u->tls, buf, (size_t)got) != 0) return fail(u, "TLS", wgnx_tls_last_error(u->tls));
+            if (ztnx_tls_feed(u->tls, buf, (size_t)got) != 0) return fail(u, "TLS", ztnx_tls_last_error(u->tls));
         }
-        if (wgnx_tls_state(u->tls) & WGNX_TLS_FAILED) return fail(u, "TLS", wgnx_tls_last_error(u->tls));
+        if (ztnx_tls_state(u->tls) & ZTNX_TLS_FAILED) return fail(u, "TLS", ztnx_tls_last_error(u->tls));
         const size_t room = sizeof u->head - 1 - u->head_len;
         if (room > 0) {
-            u->head_len += wgnx_tls_read(u->tls, (uint8_t *)u->head + u->head_len, room);
+            u->head_len += ztnx_tls_read(u->tls, (uint8_t *)u->head + u->head_len, room);
             u->head[u->head_len] = 0;
         }
         if (strstr(u->head, "\r\n\r\n") || u->head_len == sizeof u->head - 1) return parse_head(u);
-        if (got == 0 || (wgnx_tls_state(u->tls) & WGNX_TLS_PEER_CLOSED)) {
+        if (got == 0 || (ztnx_tls_state(u->tls) & ZTNX_TLS_PEER_CLOSED)) {
             return u->head_len ? parse_head(u) : fail(u, "connection closed", NULL);
         }
     }
-    return WGNX_UPDATE_PENDING;
+    return ZTNX_UPDATE_PENDING;
 }
 
-const char *wgnx_update_latest(const WgnxUpdate *u) { return u->latest; }
+const char *ztnx_update_latest(const ZtnxUpdate *u) { return u->latest; }
 
-const char *wgnx_update_error(const WgnxUpdate *u) { return u->error; }
+const char *ztnx_update_error(const ZtnxUpdate *u) { return u->error; }
 
-void wgnx_update_free(WgnxUpdate *u) {
+void ztnx_update_free(ZtnxUpdate *u) {
     if (!u) return;
     if (u->fd >= 0) close(u->fd);
-    if (u->tls) wgnx_tls_free(u->tls);
+    if (u->tls) ztnx_tls_free(u->tls);
     free(u);
 }
 
-int wgnx_version_compare(const char *a, const char *b) {
+int ztnx_version_compare(const char *a, const char *b) {
     for (;;) {
         unsigned long x = 0, y = 0;
         while (*a >= '0' && *a <= '9') x = x * 10 + (unsigned long)(*a++ - '0');

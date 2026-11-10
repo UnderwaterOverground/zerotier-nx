@@ -37,15 +37,15 @@ include $(DEVKITPRO)/libnx/switch_rules
 #   of a homebrew executable (.nro). This is intended to be used for sysmodules.
 #   NACP building is skipped as well.
 #---------------------------------------------------------------------------------
-TARGET		:=	wgnx-app
+TARGET		:=	ztnx-app
 BUILD		:=	build
 SOURCES		:=	source ../../native/driver
 DATA		:=	data
-INCLUDES	:=	include ../../crates/wgnx-ffi/include ../../native/driver
+INCLUDES	:=	include ../../crates/ztnx-ffi/include ../../native/driver
 #ROMFS	:=	romfs
-APP_TITLE	:=	wireguard-nx
+APP_TITLE	:=	zerotier-nx
 APP_AUTHOR	:=	UnderwaterOverground
-APP_VERSION	:=	1.2.0
+APP_VERSION	:=	0.1.0
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -55,7 +55,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DWGNX_BUILD_UNIX=$(WGNX_BUILD_UNIX)
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX)
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 
@@ -65,7 +65,7 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 # Rust core, built by the top-level Makefile before this one runs.
 RUST_LIB_DIR	?=	$(TOPDIR)/../../target/switch/aarch64-nintendo-switch-freestanding/release
 
-LIBS	:= -lwgnx_ffi -lnx
+LIBS	:= -lztnx_ffi -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -209,7 +209,7 @@ $(OUTPUT).nso	:	$(OUTPUT).elf
 
 endif
 
-$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libwgnx_ffi.a
+$(OUTPUT).elf	:	$(OFILES) $(RUST_LIB_DIR)/libztnx_ffi.a
 
 $(OFILES_SRC)	: $(HFILES_BIN)
 

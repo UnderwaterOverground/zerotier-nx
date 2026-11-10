@@ -1,8 +1,8 @@
-// wgnx-app: homebrew front end for the wgnx engine (a developer tool).
+// ztnx-app: homebrew front end for the ztnx engine (a developer tool).
 //
-// Brings up the tunnel from sdmc:/config/wireguard-nx/<conf> and shows
+// Brings up the tunnel from sdmc:/config/zerotier-nx/<conf> and shows
 // status. Buttons: Y = echo self-test against the `echo_test` peer,
-// X = crypto benchmark, + = exit. Run with `nxlink -s wgnx-app.nro` to stream
+// X = crypto benchmark, + = exit. Run with `nxlink -s ztnx-app.nro` to stream
 // the log back to the development machine.
 //
 // config.ini (next to the .conf):
@@ -16,12 +16,12 @@
 
 #include <switch.h>
 
-#include "wgnx.h"
-#include "wgnx_app.h"
-#include "wgnx_driver.h"
-#include "wgnx_update.h"
+#include "ztnx.h"
+#include "ztnx_app.h"
+#include "ztnx_driver.h"
+#include "ztnx_update.h"
 
-#define CONFIG_DIR "sdmc:/config/wireguard-nx"
+#define CONFIG_DIR "sdmc:/config/zerotier-nx"
 #define CONFIG_PATH CONFIG_DIR "/config.ini"
 
 typedef struct {
@@ -29,10 +29,10 @@ typedef struct {
     char echo_test[64];
 } Config;
 
-void wgnx_platform_random(uint8_t *buf, size_t len) { randomGet(buf, len); }
+void ztnx_platform_random(uint8_t *buf, size_t len) { randomGet(buf, len); }
 
-_Noreturn void wgnx_platform_panic(const uint8_t *msg, size_t len) {
-    printf("\nPANIC in wgnx core: %.*s\n", (int)len, (const char *)msg);
+_Noreturn void ztnx_platform_panic(const uint8_t *msg, size_t len) {
+    printf("\nPANIC in ztnx core: %.*s\n", (int)len, (const char *)msg);
     consoleUpdate(NULL);
     fflush(stdout);
     svcSleepThread(5000000000ULL);
@@ -75,26 +75,26 @@ static char *read_file(const char *path, size_t *len) {
     return buf;
 }
 
-static void on_event(void *ctx, const WgnxEvent *ev) {
+static void on_event(void *ctx, const ZtnxEvent *ev) {
     int *handshakes = ctx;
     switch (ev->kind) {
-        case WGNX_EVENT_ADDRESSES:
+        case ZTNX_EVENT_ADDRESSES:
             printf("Tunnel address: \x1b[36m%s\x1b[0m\n", ev->text);
             break;
-        case WGNX_EVENT_PEERS:
+        case ZTNX_EVENT_PEERS:
             printf("Peers: %u\n", ev->value);
             break;
-        case WGNX_EVENT_RESOLVE:
+        case ZTNX_EVENT_RESOLVE:
             printf("Resolving %s...\n", ev->text);
             break;
-        case WGNX_EVENT_HANDSHAKE:
+        case ZTNX_EVENT_HANDSHAKE:
             (*handshakes)++;
             printf("\x1b[32mHandshake with %s.\x1b[0m\n", ev->text);
             break;
-        case WGNX_EVENT_PEER_LOST:
+        case ZTNX_EVENT_PEER_LOST:
             printf("\x1b[33m%s stopped answering; handshaking again.\x1b[0m\n", ev->text);
             break;
-        case WGNX_EVENT_ERROR:
+        case ZTNX_EVENT_ERROR:
             printf("\x1b[31m%s\x1b[0m\n", ev->text);
             break;
         default:
@@ -106,7 +106,7 @@ static void on_event(void *ctx, const WgnxEvent *ev) {
 // user-set clock.
 static uint64_t console_unix_time(void) {
     u64 t = 0;
-    if (R_SUCCEEDED(timeGetCurrentTime(TimeType_NetworkSystemClock, &t)) && t > (u64)WGNX_BUILD_UNIX) return t;
+    if (R_SUCCEEDED(timeGetCurrentTime(TimeType_NetworkSystemClock, &t)) && t > (u64)ZTNX_BUILD_UNIX) return t;
     if (R_SUCCEEDED(timeGetCurrentTime(TimeType_UserSystemClock, &t))) return t;
     return (uint64_t)time(NULL);
 }
@@ -130,11 +130,11 @@ static void run_bench(void) {
     const size_t packet_len = 1400;
     const u32 packets = 4000;
     u64 start = armGetSystemTick();
-    wgnx_bench_aead(packet_len, packets);
+    ztnx_bench_aead(packet_len, packets);
     double secs = (double)armTicksToNs(armGetSystemTick() - start) / 1e9;
     printf("chacha20poly1305: %.1f Mbit/s\n", (double)(packet_len * packets) * 8.0 / secs / 1e6);
     start = armGetSystemTick();
-    wgnx_bench_x25519(200);
+    ztnx_bench_x25519(200);
     secs = (double)armTicksToNs(armGetSystemTick() - start) / 1e9;
     printf("x25519: %.0f ops/s\n", 200 / secs);
 }
@@ -149,22 +149,22 @@ int main(int argc, char **argv) {
 
     Result rc = socketInitializeDefault();
     if (R_SUCCEEDED(rc)) nxlinkStdio();
-    printf("wireguard-nx %s\n", wgnx_version());
+    printf("zerotier-nx %s\n", ztnx_version());
     // Core log lines at info level and above.
-    wgnx_set_log_callback(log_line, 3);
+    ztnx_set_log_callback(log_line, 3);
 
     u8 seed[32];
     randomGet(seed, sizeof seed);
-    wgnx_seed_rng(seed);
-    u32 st = wgnx_selftest();
-    if (st != WGNX_SELFTEST_OK) printf("\x1b[31mcrypto selftest FAILED (%u)\x1b[0m\n", st);
+    ztnx_seed_rng(seed);
+    u32 st = ztnx_selftest();
+    if (st != ZTNX_SELFTEST_OK) printf("\x1b[31mcrypto selftest FAILED (%u)\x1b[0m\n", st);
 
     Config cfg;
     load_config(&cfg);
     char conf_path[128];
     snprintf(conf_path, sizeof conf_path, "%s/%s", CONFIG_DIR, cfg.conf);
-    WgnxEngine *engine = NULL;
-    WgnxDriver *driver = NULL;
+    ZtnxEngine *engine = NULL;
+    ZtnxDriver *driver = NULL;
     int handshakes = 0;
     size_t conf_len = 0;
     char *conf = NULL;
@@ -175,29 +175,29 @@ int main(int argc, char **argv) {
     } else {
         uint64_t now_unix = console_unix_time();
         bool corrected = false;
-        uint64_t unix_time = wgnx_sane_unix_time(now_unix, WGNX_UPDATE_HOST, &corrected);
+        uint64_t unix_time = ztnx_sane_unix_time(now_unix, ZTNX_UPDATE_HOST, &corrected);
         if (corrected) {
             printf("\x1b[33mConsole clock looks wrong (%s); using %s's time (%s).\n"
                    "Fix it with the QuickNTP overlay to avoid this.\x1b[0m\n",
-                   fmt_date(now_unix), WGNX_UPDATE_HOST, fmt_date(unix_time));
+                   fmt_date(now_unix), ZTNX_UPDATE_HOST, fmt_date(unix_time));
         } else if (unix_time == 0) {
             printf("\x1b[31mConsole clock looks wrong (%s) and %s's time is unavailable.\n"
                    "Set the clock (QuickNTP overlay or System Settings).\x1b[0m\n",
-                   fmt_date(now_unix), WGNX_UPDATE_HOST);
+                   fmt_date(now_unix), ZTNX_UPDATE_HOST);
             unix_time = now_unix;
         }
-        engine = wgnx_engine_new(wgnx_driver_now_ns(), unix_time);
-        WgnxConfig wc = {.conf = conf, .conf_len = conf_len};
+        engine = ztnx_engine_new(ztnx_driver_now_ns(), unix_time);
+        ZtnxConfig wc = {.conf = conf, .conf_len = conf_len};
         char err[160];
-        if (!wgnx_engine_reload(engine, &wc, wgnx_driver_now_ns(), err, sizeof err)) {
+        if (!ztnx_engine_reload(engine, &wc, ztnx_driver_now_ns(), err, sizeof err)) {
             printf("\x1b[31m%s: %s\x1b[0m\n", cfg.conf, err);
         } else {
             printf("Config: %s\n", cfg.conf);
-            driver = wgnx_driver_new(engine, on_event, &handshakes);
-            const uint16_t port = wgnx_engine_listen_port(engine);
-            if (driver && wgnx_driver_open_udp(driver, port) != 0 && wgnx_driver_open_udp(driver, 0) != 0) {
+            driver = ztnx_driver_new(engine, on_event, &handshakes);
+            const uint16_t port = ztnx_engine_listen_port(engine);
+            if (driver && ztnx_driver_open_udp(driver, port) != 0 && ztnx_driver_open_udp(driver, 0) != 0) {
                 printf("\x1b[31mno UDP socket\x1b[0m\n");
-                wgnx_driver_free(driver);
+                ztnx_driver_free(driver);
                 driver = NULL;
             }
         }
@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
     }
     printf("\nY: echo test   X: benchmark   +: exit\n\n");
 
-    WgnxEcho echo;
+    ZtnxEcho echo;
     bool echo_running = false;
     while (appletMainLoop()) {
         padUpdate(&pad);
@@ -213,22 +213,22 @@ int main(int argc, char **argv) {
         if (down & HidNpadButton_Plus) break;
         if (down & HidNpadButton_X) run_bench();
         if ((down & HidNpadButton_Y) && driver) {
-            WgnxAddr target;
-            if (!cfg.echo_test[0] || wgnx_parse_ipv4(cfg.echo_test, 7, &target) != 0) {
+            ZtnxAddr target;
+            if (!cfg.echo_test[0] || ztnx_parse_ipv4(cfg.echo_test, 7, &target) != 0) {
                 printf("set echo_test=<peer ip> in config.ini\n");
             } else if (handshakes == 0) {
                 printf("no handshake with a peer yet\n");
             } else {
                 printf("echo test against %s:7 ...\n", cfg.echo_test);
-                wgnx_echo_init(&echo, &target);
+                ztnx_echo_init(&echo, &target);
                 echo_running = true;
             }
         }
         if (driver) {
             // Short waits keep the UI responsive; the engine is event-driven.
-            if (wgnx_driver_run_once(driver, 16) != 0) printf("driver error\n");
+            if (ztnx_driver_run_once(driver, 16) != 0) printf("driver error\n");
             if (echo_running) {
-                int r = wgnx_echo_step(&echo, engine, wgnx_driver_now_ns());
+                int r = ztnx_echo_step(&echo, engine, ztnx_driver_now_ns());
                 if (r) {
                     printf(r > 0 ? "\x1b[32mecho test PASSED\x1b[0m\n" : "\x1b[31mecho test FAILED\x1b[0m\n");
                     echo_running = false;
@@ -238,8 +238,8 @@ int main(int argc, char **argv) {
         consoleUpdate(NULL);
     }
 
-    wgnx_driver_free(driver);
-    wgnx_engine_free(engine);
+    ztnx_driver_free(driver);
+    ztnx_engine_free(engine);
     socketExit();
     consoleExit(NULL);
     return 0;

@@ -24,6 +24,7 @@ pub mod bench;
 pub mod config;
 pub mod crypto;
 pub mod engine;
+pub mod l2;
 pub mod netstack;
 pub mod rng;
 pub mod selftest;

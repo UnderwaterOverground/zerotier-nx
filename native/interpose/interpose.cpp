@@ -6,12 +6,13 @@
 //          (not for SIP-protected binaries such as /usr/bin/curl)
 //   Linux: LD_PRELOAD=target/linux/libztnx_interpose.so prog ...
 //
-// Configuration (environment): ZTNX_CONTROL_URL (required to activate),
-// ZTNX_AUTHKEY, ZTNX_HOSTNAME, ZTNX_STATE, ZTNX_EXTRA_ROOT, ZTNX_CONNECT_MAP,
-// ZTNX_PORT, ZTNX_WAIT_READY=1 (block startup until the netmap arrives),
-// ZTNX_LOG=1 (print engine events to stderr), ZTNX_TAILDROP_DIR (receive
-// Taildrop files there), ZTNX_TAILDROP_PORT, and ZTNX_ACCEPT_ROUTES=1 (use
-// peers' subnet routes).
+// Configuration (environment): ZTNX_STATE (the state directory) and
+// ZTNX_NWID (the network to join, hex) activate it. Optional: ZTNX_PORT,
+// ZTNX_GEN_IDENTITY=1 (make an identity if the state has none),
+// ZTNX_WAIT_READY=1 (hold the first socket call until the network is up
+// with an address), ZTNX_LOG=1 (print status changes to stderr),
+// ZTNX_LOG_LEVEL, ZTNX_ENGINE_STACK (bytes; default the sysmodule's),
+// ZTNX_HEAP_LOG=<ms>, ZTNX_TRACE=1.
 #include <thread>
 #include <dlfcn.h>
 #include <errno.h>
@@ -35,6 +36,7 @@
 #include <vector>
 
 #include "runtime.hpp"
+#include "session.hpp"
 #include "vsock.hpp"
 
 extern "C" void ztnx_platform_random(uint8_t *buf, size_t len) {
@@ -118,7 +120,7 @@ private:
 
 struct State {
     LibcBackend backend;
-    std::unique_ptr<ztnx::Runtime> runtime;
+    std::unique_ptr<ztnx::HostSession> session;
     std::unique_ptr<ztnx::VSock> vsock;
 };
 
@@ -142,34 +144,33 @@ std::string Env(const char *name, const char *def = "") {
 }
 
 void Init() {
-    std::string conf = Env("ZTNX_CONF");
-    if (conf.empty()) return;
+    const std::string state = Env("ZTNX_STATE"), nwid = Env("ZTNX_NWID");
+    if (state.empty() || nwid.empty()) return;
     g_initializing = true;
     struct Done {
         ~Done() { g_initializing = false; }
     } done;
     auto *st = new State();
-    ztnx::RuntimeConfig cfg;
-    cfg.conf_path = conf;
-    cfg.udp_port = static_cast<uint16_t>(atoi(Env("ZTNX_PORT", "0").c_str()));
-    static std::atomic<int> handshakes{0};
-    bool log = Env("ZTNX_LOG") == "1";
-    cfg.on_event = [log](const ZtnxEvent &ev) {
-        if (ev.kind == ZTNX_EVENT_HANDSHAKE) handshakes++;
-        if (log) fprintf(stderr, "[ztnx] event %u value=%u %s\n", ev.kind, ev.value, ev.text);
-    };
+    const bool log = Env("ZTNX_LOG") == "1";
+    ztnx::HostOptions opt;
+    opt.state = state;
+    opt.nwid = strtoull(nwid.c_str(), nullptr, 16);
+    opt.port = static_cast<uint16_t>(atoi(Env("ZTNX_PORT", "0").c_str()));
+    opt.gen_identity = Env("ZTNX_GEN_IDENTITY") == "1";
+    opt.log = log;
+    if (const unsigned long stack = strtoul(Env("ZTNX_ENGINE_STACK", "0").c_str(), nullptr, 0)) opt.engine_stack = stack;
     int log_level = atoi(Env("ZTNX_LOG_LEVEL", log ? "3" : "0").c_str());
     if (log_level > 0)
         ztnx_set_log_callback([](uint32_t level, const char *msg) { fprintf(stderr, "[ztnx %u] %s\n", level, msg); },
                               static_cast<uint32_t>(log_level));
     std::string err;
-    st->runtime = ztnx::Runtime::Start(cfg, &err);
-    if (!st->runtime) {
+    st->session = ztnx::HostSession::Start(opt, &err);
+    if (!st->session) {
         fprintf(stderr, "[ztnx] disabled: %s\n", err.c_str());
         delete st;
         return;
     }
-    st->vsock = std::make_unique<ztnx::VSock>(st->backend, *st->runtime);
+    st->vsock = std::make_unique<ztnx::VSock>(st->backend, st->session->runtime());
     g_state = st;
     // ZTNX_HEAP_LOG=<ms>: print the Rust heap periodically (memory tests).
     if (int ms = atoi(Env("ZTNX_HEAP_LOG", "0").c_str()); ms > 0) {
@@ -182,10 +183,9 @@ void Init() {
             }
         }).detach();
     }
-    // ZTNX_WAIT_READY=1: hold the first socket call until a peer handshake.
-    if (Env("ZTNX_WAIT_READY") == "1") {
-        for (int i = 0; i < 300 && handshakes == 0; i++) usleep(100000);
-        if (handshakes == 0) fprintf(stderr, "[ztnx] warning: no handshake after 30s\n");
+    // ZTNX_WAIT_READY=1: hold the first socket call until the network is up.
+    if (Env("ZTNX_WAIT_READY") == "1" && !st->session->WaitUp(std::chrono::seconds(60))) {
+        fprintf(stderr, "[ztnx] warning: the network is not up after 60 s\n");
     }
 }
 

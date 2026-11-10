@@ -49,7 +49,8 @@ ifeq ($(PLATFORM),switch)
 else
   CXX ?= c++
   AR  ?= ar
-  CXXFLAGS := $(COMMON) $(STUBS) -O2 -pthread $(EXTRA_CXXFLAGS)
+  # -fPIC: the library also goes into the LD_PRELOAD shim.
+  CXXFLAGS := $(COMMON) $(STUBS) -O2 -fPIC -pthread $(EXTRA_CXXFLAGS)
   ifneq ($(filter aarch64 arm64,$(shell uname -m)),)
     CXXFLAGS += -DZT_NO_TYPE_PUNNING -DZT_ARCH_ARM_HAS_NEON -march=armv8-a+crypto
   else

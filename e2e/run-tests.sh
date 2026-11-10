@@ -59,6 +59,20 @@ check "echo again after resume" wait_log 60 '^echo after resume: ok' /state/main
 check "ztnx-c reports success" wait_log 10 '^result: ok' /state/main/log
 echo "--- ztnx-c log ---"; client cat /state/main/log | sed 's/^/    /'
 
+# ---- 3. Unmodified programs through the socket layer (the LD_PRELOAD shim,
+# ----    the code the bsd:u MITM uses).
+echo "== socket layer =="
+MAIN_IP=$(client sed -n 's/^network: OK ip=\([0-9.]*\).*/\1/p' /state/main/log | tail -1)
+shim() { docker compose exec -T -e LD_PRELOAD=/out/libztnx_interpose.so -e ZTNX_STATE=/state/main -e ZTNX_NWID="$NW" -e ZTNX_WAIT_READY=1 "$@"; }
+shim client /out/vsock-test "$PEER_IP" 172.31.2.20:7 "$MAIN_IP" > "$ZTNX_STATE_DIR/client/vsock.log" 2>&1
+check "the socket patterns apps use (vsock-test)" test $? -eq 0
+sed 's/^/    /' "$ZTNX_STATE_DIR/client/vsock.log" | grep -v '^    PASS' | head -20
+check "curl fetches a page from the peer" sh -c "docker compose exec -T -e LD_PRELOAD=/out/libztnx_interpose.so -e ZTNX_STATE=/state/main -e ZTNX_NWID=$NW -e ZTNX_WAIT_READY=1 client curl -s -m 20 http://$PEER_IP:8080/ | grep -q 'hello from the peer'"
+TCP_MBIT=$(shim client iperf3 -c "$PEER_IP" -t 5 -J 2>/dev/null | jq -r '.end.sum_received.bits_per_second / 1e6 | floor' 2>/dev/null)
+check "iperf3 TCP to the peer, 5 s (${TCP_MBIT:-?} Mbit/s, at least 50)" test "${TCP_MBIT:-0}" -ge 50
+UDP_MBIT=$(shim client iperf3 -c "$PEER_IP" -u -b 20M -l 1000 -t 5 -J 2>/dev/null | jq -r '.end.sum.bits_per_second / 1e6 | floor' 2>/dev/null)
+check "iperf3 UDP 20 Mbit/s to the peer (${UDP_MBIT:-?} Mbit/s sent)" test "${UDP_MBIT:-0}" -ge 19
+
 echo
 if [ "$fails" -eq 0 ]; then echo "all passed"; else echo "$fails failed"; fi
 exit "$fails"

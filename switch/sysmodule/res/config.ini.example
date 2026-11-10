@@ -1,44 +1,45 @@
-# zerotier-nx settings: copy to config.ini and edit. Everything is optional;
-# see the setup guide linked from the zerotier-nx README. Changes apply
-# after a restart (the overlay's Config page switches .conf files at once).
+# zerotier-nx settings: copy to config.ini and edit. Only network= is needed.
+# Changes apply after a restart.
 #
-# The tunnel itself is a wg-quick style file next to this one, e.g. wg0.conf,
-# as any WireGuard server hands out. A "# Name = gaming-pc" comment under a
-# [Peer] names it in the overlay and lets Moonlight find it by that name;
-# "# Host = gaming-pc 192.168.1.50" anywhere in it names another address the
-# tunnel reaches, such as a PC on the server's home network.
-#
-# Which .conf to use. Default: the only one in this folder, else wg0.conf.
-# conf=wg0.conf
-# Which programs' sockets can reach the tunnel: homebrew (default), off, or
-# homebrew,sys-ftpd to also serve sys-ftpd on the console's tunnel address
+# The ZeroTier network to join: its 16-character ID, from my.zerotier.com or
+# your own controller. The Switch's own ID (10 characters) is in the overlay
+# and in sysmodule.log once it has started; authorize it in the controller.
+network=0123456789abcdef
+# ZeroTier's UDP port (default 9993; another is used if it is taken).
+# port=9993
+# Names for addresses on the network, one line each: "host = name address".
+# Apps can then use the name, and Moonlight finds its PC by it. ZeroTier
+# itself has no device names.
+# host = gaming-pc 10.147.17.5
+# Which programs' sockets can reach the network: homebrew (default), off, or
+# homebrew,sys-ftpd to also serve sys-ftpd on the console's ZeroTier address
 # (restarts sys-ftpd once at boot; about 70 KB more memory).
 # mitm=homebrew
 # Home-screen forwarders are served automatically when their title ID doesn't
 # start with 01 (most don't). List any that do (16 hex digits, up to 16,
-# comma or space separated) to let them reach the tunnel too. The tool that
+# comma or space separated) to let them reach the network too. The tool that
 # made the forwarder shows its ID, as do title managers such as DBI or
 # Goldleaf. Ignored with mitm=off.
 # mitm_titles=0500000000001234, 05ABCDEF00000000
-# Peer names from the .conf into Atmosphere's hosts file, so apps can use
-# them (off: addresses only).
+# The host= names into Atmosphere's hosts file, so apps can use them (off:
+# addresses only).
 # hosts=on
-# Peers at private addresses (10.x, 172.16-31.x, 192.168.x) are named by a
-# stand-in in 100.127.0.0/16 with the same last two numbers, so Moonlight
-# sends video packets that fit the tunnel; homebrew connecting to it reaches
-# the real address (off: name the real addresses).
+# Named devices at private addresses (10.x, 172.16-31.x, 192.168.x, which is
+# where ZeroTier networks usually are) get a stand-in in 100.127.0.0/16 with
+# the same last two numbers, so Moonlight sends video packets that fit one
+# ZeroTier datagram; homebrew connecting to it reaches the real address (off:
+# name the real addresses).
 # aliases=on
-# Memory for tunnel sockets, shared by all apps (KB, 128-384, default 320).
-# TCP connections get smaller buffers as it fills, so about 17 fit at once by
-# default; raise it only if apps report "no buffer space" (errno 105). It
-# comes out of the sysmodule's fixed heap.
+# Memory for the network's sockets, shared by all apps (KB, 128-384, default
+# 320). TCP connections get smaller buffers as it fills, so about 17 fit at
+# once by default; raise it only if apps report "no buffer space" (errno
+# 105). It comes out of the sysmodule's fixed heap.
 # overlay_budget_kb=320
-# A 5-second "Connected. IP: ..." toast after each boot (also switchable in
-# the overlay).
+# A 5-second "Connected. IP: ..." toast after each boot.
 # connect_notice=on
 # Ask GitHub for the latest release once per boot, 10 seconds after
-# connecting, and show a toast if it's newer (also switchable in the overlay).
+# connecting, and show a toast if it's newer.
 # update_check=on
-# Send the log as UDP datagrams, one per line, to this address (a tunnel
-# address works from anywhere).
+# Send the log as UDP datagrams, one per line, to this address (an address on
+# the ZeroTier network works from anywhere).
 # log_udp=192.168.1.10:5514

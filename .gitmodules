@@ -4,3 +4,6 @@
 [submodule "third_party/libtesla"]
 	path = third_party/libtesla
 	url = https://github.com/WerWolv/libtesla.git
+[submodule "third_party/ZeroTierOne"]
+	path = third_party/ZeroTierOne
+	url = https://github.com/zerotier/ZeroTierOne.git

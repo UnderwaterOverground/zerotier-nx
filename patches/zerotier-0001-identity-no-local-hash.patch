@@ -1,0 +1,85 @@
+diff --git a/node/IncomingPacket.cpp b/node/IncomingPacket.cpp
+index cf55537a5..15eddc65f 100644
+--- a/node/IncomingPacket.cpp
++++ b/node/IncomingPacket.cpp
+@@ -439,11 +439,13 @@ bool IncomingPacket::_doHELLO(const RuntimeEnvironment* RR, void* tPtr, const bo
+ 			return true;
+ 		}
+ 
++#ifndef ZT_NO_LOCAL_IDENTITY_VALIDATION
+ 		// Check rate limits
+ 		if (! RR->node->rateGateIdentityVerification(now, _path->address())) {
+ 			RR->t->incomingPacketDroppedHELLO(tPtr, _path, pid, fromAddress, "rate limit exceeded");
+ 			return true;
+ 		}
++#endif
+ 
+ 		// Check packet integrity and MAC (this is faster than locallyValidate() so do it first to filter out total crap)
+ 		SharedPtr<Peer> newPeer(new Peer(RR, RR->identity, id));
+@@ -452,11 +454,23 @@ bool IncomingPacket::_doHELLO(const RuntimeEnvironment* RR, void* tPtr, const bo
+ 			return true;
+ 		}
+ 
++#ifdef ZT_NO_LOCAL_IDENTITY_VALIDATION
++		// The memory-hard address derivation check needs a 2 MB scratch buffer,
++		// which this build cannot afford. Instead of validating locally, ask an
++		// upstream (root) for the identity behind this address. OK(WHOIS) answers
++		// from upstreams are already trusted as-is and add the peer to the
++		// topology; the sender's next HELLO then takes the known-peer path above
++		// and is checked against the identity the root gave us.
++		RR->sw->requestWhois(tPtr, now, id.address());
++		RR->t->incomingPacketDroppedHELLO(tPtr, _path, pid, fromAddress, "identity not yet known, WHOIS sent");
++		return true;
++#else
+ 		// Check that identity's address is valid as per the derivation function
+ 		if (! id.locallyValidate()) {
+ 			RR->t->incomingPacketDroppedHELLO(tPtr, _path, pid, fromAddress, "invalid identity");
+ 			return true;
+ 		}
++#endif
+ 
+ 		peer = RR->topology->addPeer(tPtr, newPeer);
+ 
+diff --git a/node/Node.cpp b/node/Node.cpp
+index c6b46fb71..da78405bf 100644
+--- a/node/Node.cpp
++++ b/node/Node.cpp
+@@ -86,9 +86,11 @@ Node::Node(void* uptr, void* tptr, const struct ZT_Node_Config* config, const st
+ 			throw ZT_EXCEPTION_INVALID_IDENTITY;
+ 		}
+ 
++#ifndef ZT_NO_LOCAL_IDENTITY_VALIDATION
+ 		if (! RR->identity.locallyValidate()) {
+ 			throw ZT_EXCEPTION_INVALID_IDENTITY;
+ 		}
++#endif
+ 	}
+ 
+ 	if (n <= 0) {
+diff --git a/node/Node.hpp b/node/Node.hpp
+index 8ea09f551..a0ecb158a 100644
+--- a/node/Node.hpp
++++ b/node/Node.hpp
+@@ -242,7 +242,7 @@ class Node : public NetworkController::Sender {
+ 	 */
+ 	inline bool rateGateIdentityVerification(const int64_t now, const InetAddress& from)
+ 	{
+-		unsigned long iph = from.rateGateHash();
++		unsigned long iph = from.rateGateHash() % (sizeof(_lastIdentityVerification) / sizeof(_lastIdentityVerification[0]));
+ 		if ((now - _lastIdentityVerification[iph]) >= ZT_IDENTITY_VALIDATION_SOURCE_RATE_LIMIT) {
+ 			_lastIdentityVerification[iph] = now;
+ 			return true;
+@@ -314,7 +314,13 @@ class Node : public NetworkController::Sender {
+ 	uint32_t _expectingRepliesTo[ZT_EXPECTING_REPLIES_BUCKET_MASK1 + 1][ZT_EXPECTING_REPLIES_BUCKET_MASK2 + 1];
+ 
+ 	// Time of last identity verification indexed by InetAddress.rateGateHash() -- used in IncomingPacket::_doHELLO() via rateGateIdentityVerification()
++#ifdef ZT_NO_LOCAL_IDENTITY_VALIDATION
++	// Without the memory-hard check there is nothing expensive to gate; a small
++	// table keeps the collision-branch rate limit while saving 126 KB.
++	int64_t _lastIdentityVerification[256];
++#else
+ 	int64_t _lastIdentityVerification[16384];
++#endif
+ 
+ 	// Statistics about stuff happening
+ 	volatile ZT_NodeStatistics _stats;

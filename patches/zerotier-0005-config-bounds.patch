@@ -1,0 +1,41 @@
+diff --git a/node/Network.cpp b/node/Network.cpp
+index 425941f00..4fcb88232 100644
+--- a/node/Network.cpp
++++ b/node/Network.cpp
+@@ -1693,8 +1693,8 @@ void Network::_externalConfig(ZT_VirtualNetworkConfig* ec) const
+ 		}
+ 	}
+ 
+-	ec->multicastSubscriptionCount = (unsigned int)_myMulticastGroups.size();
+-	for (unsigned long i = 0; i < (unsigned long)_myMulticastGroups.size(); ++i) {
++	ec->multicastSubscriptionCount = (unsigned int)std::min((unsigned long)_myMulticastGroups.size(), (unsigned long)ZT_MAX_MULTICAST_SUBSCRIPTIONS);
++	for (unsigned long i = 0; i < (unsigned long)ec->multicastSubscriptionCount; ++i) {
+ 		ec->multicastSubscriptions[i].mac = _myMulticastGroups[i].mac().toInt();
+ 		ec->multicastSubscriptions[i].adi = _myMulticastGroups[i].adi();
+ 	}
+diff --git a/node/NetworkConfig.cpp b/node/NetworkConfig.cpp
+index d388f57bc..a569f281c 100644
+--- a/node/NetworkConfig.cpp
++++ b/node/NetworkConfig.cpp
+@@ -484,7 +484,9 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 					while (p < tmp->size()) {
+ 						Capability cap;
+ 						p += cap.deserialize(*tmp, p);
+-						this->capabilities[this->capabilityCount++] = cap;
++						if (this->capabilityCount < ZT_MAX_NETWORK_CAPABILITIES) {
++							this->capabilities[this->capabilityCount++] = cap;
++						}
+ 					}
+ 				}
+ 				catch (...) {
+@@ -498,7 +500,9 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 					while (p < tmp->size()) {
+ 						Tag tag;
+ 						p += tag.deserialize(*tmp, p);
+-						this->tags[this->tagCount++] = tag;
++						if (this->tagCount < ZT_MAX_NETWORK_TAGS) {
++							this->tags[this->tagCount++] = tag;
++						}
+ 					}
+ 				}
+ 				catch (...) {

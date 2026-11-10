@@ -1,0 +1,59 @@
+diff --git a/node/Identity.cpp b/node/Identity.cpp
+index 86f005280..893c5618f 100644
+--- a/node/Identity.cpp
++++ b/node/Identity.cpp
+@@ -81,10 +81,12 @@ struct _Identity_generate_cond {
+ 	char* genmem;
+ };
+ 
+-void Identity::generate()
++void Identity::generate(void* scratch)
+ {
+ 	unsigned char digest[64];
+-	char* genmem = new char[ZT_IDENTITY_GEN_MEMORY];
++	// A caller that cannot take ZT_IDENTITY_GEN_MEMORY (2 MB) from its heap
++	// passes a buffer of that size obtained some other way.
++	char* genmem = (scratch) ? reinterpret_cast<char*>(scratch) : new char[ZT_IDENTITY_GEN_MEMORY];
+ 
+ 	ECC::Pair kp;
+ 	do {
+@@ -98,7 +100,9 @@ void Identity::generate()
+ 	}
+ 	*_privateKey = kp.priv;
+ 
+-	delete[] genmem;
++	if (! scratch) {
++		delete[] genmem;
++	}
+ }
+ 
+ bool Identity::locallyValidate() const
+diff --git a/node/Identity.hpp b/node/Identity.hpp
+index bcd8c52a7..c9e3b48a0 100644
+--- a/node/Identity.hpp
++++ b/node/Identity.hpp
+@@ -85,7 +85,7 @@ class Identity {
+ 	 *
+ 	 * This is a time consuming operation.
+ 	 */
+-	void generate();
++	void generate(void* scratch = (void*)0);
+ 
+ 	/**
+ 	 * Check the validity of this identity's pairing of key to address
+diff --git a/node/Node.cpp b/node/Node.cpp
+index da78405bf..16eced087 100644
+--- a/node/Node.cpp
++++ b/node/Node.cpp
+@@ -94,6 +94,11 @@ Node::Node(void* uptr, void* tptr, const struct ZT_Node_Config* config, const st
+ 	}
+ 
+ 	if (n <= 0) {
++#ifdef ZT_NO_LOCAL_IDENTITY_VALIDATION
++		// Generating needs the same 2 MB buffer as validating. The embedder makes
++		// the identity beforehand (Identity::generate() with its own buffer).
++		throw ZT_EXCEPTION_INVALID_IDENTITY;
++#endif
+ 		RR->identity.generate();
+ 		RR->identity.toString(false, RR->publicIdentityStr);
+ 		RR->identity.toString(true, RR->secretIdentityStr);

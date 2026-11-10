@@ -1,0 +1,31 @@
+diff --git a/node/Switch.cpp b/node/Switch.cpp
+index efa6c0ba2..94af70b76 100644
+--- a/node/Switch.cpp
++++ b/node/Switch.cpp
+@@ -492,7 +492,12 @@ void Switch::onLocalEthernet(void* tPtr, const SharedPtr<Network>& network, cons
+ 					// this prevents problems related to trying to do rx while inside of doing tx, such as acquiring same lock recursively
+ 					//
+ 
++#ifdef ZT_NO_THREADS
++					// No thread to answer from, and the frame callback must not run inside
++					// this call: the forged advertisement is not delivered.
++#else
+ 					std::thread([=]() { RR->node->putFrame(tPtr, network->id(), network->userPtr(), peerMac, from, ZT_ETHERTYPE_IPV6, 0, adv, 72); }).detach();
++#endif
+ 
+ 					return;	  // NDP emulation done. We have forged a "fake" reply, so no need to send actual NDP query.
+ 				}	// else no NDP emulation
+@@ -527,7 +532,13 @@ void Switch::onLocalEthernet(void* tPtr, const SharedPtr<Network>& network, cons
+ 		//
+ 		// same pattern as putFrame call above
+ 		//
++#ifdef ZT_NO_THREADS
++		// Dropped: without threads the frame would have to be handed back from
++		// inside this call. An embedder that builds this way delivers frames for
++		// its own address itself and never sends them here.
++#else
+ 		std::thread([=]() { RR->node->putFrame(tPtr, network->id(), network->userPtr(), from, to, etherType, vlanId, data, len); }).detach();
++#endif
+ 	}
+ 	else if (to[0] == MAC::firstOctetForNetwork(network->id())) {
+ 		// Destination is another ZeroTier peer on the same network

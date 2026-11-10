@@ -1,0 +1,87 @@
+diff --git a/include/ZeroTierOne.h b/include/ZeroTierOne.h
+index 04541773c..977629757 100644
+--- a/include/ZeroTierOne.h
++++ b/include/ZeroTierOne.h
+@@ -125,17 +125,23 @@ extern "C" {
+ /**
+  * Maximum number of pushed routes on a network
+  */
++#ifndef ZT_MAX_NETWORK_ROUTES
+ #define ZT_MAX_NETWORK_ROUTES 128
++#endif
+ 
+ /**
+  * Maximum number of statically assigned IP addresses per network endpoint using ZT address management (not DHCP)
+  */
++#ifndef ZT_MAX_ZT_ASSIGNED_ADDRESSES
+ #define ZT_MAX_ZT_ASSIGNED_ADDRESSES 32
++#endif
+ 
+ /**
+  * Maximum number of "specialists" on a network -- bridges, relays, etc.
+  */
++#ifndef ZT_MAX_NETWORK_SPECIALISTS
+ #define ZT_MAX_NETWORK_SPECIALISTS 512
++#endif
+ 
+ /**
+  * Maximum number of multicast group subscriptions per network
+@@ -150,22 +156,30 @@ extern "C" {
+ /**
+  * Maximum number of base (non-capability) network rules
+  */
++#ifndef ZT_MAX_NETWORK_RULES
+ #define ZT_MAX_NETWORK_RULES 1024
++#endif
+ 
+ /**
+  * Maximum number of per-member capabilities per network
+  */
++#ifndef ZT_MAX_NETWORK_CAPABILITIES
+ #define ZT_MAX_NETWORK_CAPABILITIES 128
++#endif
+ 
+ /**
+  * Maximum number of per-member tags per network
+  */
++#ifndef ZT_MAX_NETWORK_TAGS
+ #define ZT_MAX_NETWORK_TAGS 128
++#endif
+ 
+ /**
+  * Maximum number of direct network paths to a given peer
+  */
++#ifndef ZT_MAX_PEER_NETWORK_PATHS
+ #define ZT_MAX_PEER_NETWORK_PATHS 64
++#endif
+ 
+ /**
+  * Maximum number of path configurations that can be set
+diff --git a/node/Constants.hpp b/node/Constants.hpp
+index 6baf8c7fe..2d78b747d 100644
+--- a/node/Constants.hpp
++++ b/node/Constants.hpp
+@@ -297,7 +297,9 @@
+ /**
+  * Size of RX queue
+  */
++#ifndef ZT_RX_QUEUE_SIZE
+ #define ZT_RX_QUEUE_SIZE 32
++#endif
+ 
+ /**
+  * Size of TX queue
+diff --git a/node/Network.hpp b/node/Network.hpp
+index 3a6cd270e..f7d1c7e97 100644
+--- a/node/Network.hpp
++++ b/node/Network.hpp
+@@ -32,7 +32,9 @@
+ #include <string>
+ #include <vector>
+ 
++#ifndef ZT_NETWORK_MAX_INCOMING_UPDATES
+ #define ZT_NETWORK_MAX_INCOMING_UPDATES 3
++#endif
+ #define ZT_NETWORK_MAX_UPDATE_CHUNKS	((ZT_NETWORKCONFIG_DICT_CAPACITY / 1024) + 1)
+ 
+ namespace ZeroTier {

@@ -1,0 +1,199 @@
+diff --git a/include/ZeroTierOne.h b/include/ZeroTierOne.h
+index 977629757..9e1f5ec33 100644
+--- a/include/ZeroTierOne.h
++++ b/include/ZeroTierOne.h
+@@ -206,6 +206,24 @@ extern "C" {
+  */
+ #define ZT_MAX_MULTICAST_SUBSCRIPTIONS 1024
+ 
++/**
++ * Bits for ZT_VirtualNetworkConfig::truncated: the controller sent more of
++ * something than this build has room for, and the rest was left out
++ */
++#define ZT_NETWORK_CONFIG_TRUNCATED_RULES		 0x01
++#define ZT_NETWORK_CONFIG_TRUNCATED_ROUTES		 0x02
++#define ZT_NETWORK_CONFIG_TRUNCATED_ADDRESSES	 0x04
++#define ZT_NETWORK_CONFIG_TRUNCATED_CAPABILITIES 0x08
++#define ZT_NETWORK_CONFIG_TRUNCATED_TAGS		 0x10
++#define ZT_NETWORK_CONFIG_TRUNCATED_SPECIALISTS	 0x20
++#define ZT_NETWORK_CONFIG_TRUNCATED_CERTIFICATES 0x40
++
++/**
++ * Bit for ZT_VirtualNetworkConfig::truncated: the controller's configuration
++ * is larger than this build can receive at all, so none of it was applied
++ */
++#define ZT_NETWORK_CONFIG_TOO_LARGE 0x80
++
+ /**
+  * Maximum value for link quality (min is 0)
+  */
+@@ -1238,6 +1256,12 @@ typedef struct {
+ 	 * sso provider
+ 	 **/
+ 	char ssoProvider[64];
++
++	/**
++	 * Which parts of the controller's configuration did not fit this build's
++	 * limits (ZT_NETWORK_CONFIG_TRUNCATED_* bits), or 0 if all of it was applied
++	 */
++	unsigned int truncated;
+ } ZT_VirtualNetworkConfig;
+ 
+ /**
+diff --git a/node/Network.cpp b/node/Network.cpp
+index 4fcb88232..be5c8b196 100644
+--- a/node/Network.cpp
++++ b/node/Network.cpp
+@@ -658,6 +658,7 @@ Network::Network(const RuntimeEnvironment* renv, void* tPtr, uint64_t nwid, void
+ 	, _portInitialized(false)
+ 	, _lastConfigUpdate(0)
+ 	, _destroyed(false)
++	, _configTooLarge(false)
+ 	, _netconfFailure(NETCONF_FAILURE_NONE)
+ 	, _portError(0)
+ 	, _num_multicast_groups { Metrics::network_num_multicast_groups.Add({ { "network_id", _nwidStr } }) }
+@@ -1100,6 +1101,10 @@ uint64_t Network::handleConfigChunk(void* tPtr, const uint64_t packetId, const A
+ 			ptr += 4;
+ 
+ 			if (((chunkIndex + chunkLen) > totalLength) || (totalLength >= ZT_NETWORKCONFIG_DICT_CAPACITY)) {	// >= since we need room for a null at the end
++				if ((totalLength >= ZT_NETWORKCONFIG_DICT_CAPACITY) && (source == controller()) && (! _configTooLarge)) {
++					_configTooLarge = true;
++					_sendUpdateEvent(tPtr);
++				}
+ 				return 0;
+ 			}
+ 			if ((chunk[ptr] != 1) || (chunk.at<uint16_t>(ptr + 1) != ZT_ECC_SIGNATURE_LEN)) {
+@@ -1161,6 +1166,10 @@ uint64_t Network::handleConfigChunk(void* tPtr, const uint64_t packetId, const A
+ 			chunkIndex = 0;
+ 
+ 			if (totalLength >= ZT_NETWORKCONFIG_DICT_CAPACITY) {
++				if ((source == controller()) && (! _configTooLarge)) {
++					_configTooLarge = true;
++					_sendUpdateEvent(tPtr);
++				}
+ 				return 0;
+ 			}
+ 
+@@ -1242,6 +1251,7 @@ int Network::setConfiguration(void* tPtr, const NetworkConfig& nconf, bool saveT
+ 			_config = nconf;
+ 			_lastConfigUpdate = RR->node->now();
+ 			_netconfFailure = NETCONF_FAILURE_NONE;
++			_configTooLarge = false;
+ 
+ 			oldPortInitialized = _portInitialized;
+ 			_portInitialized = true;
+@@ -1711,6 +1721,7 @@ void Network::_externalConfig(ZT_VirtualNetworkConfig* ec) const
+ 	Utils::scopy(ec->ssoState, sizeof(ec->ssoState), _config.ssoState);
+ 	Utils::scopy(ec->ssoClientID, sizeof(ec->ssoClientID), _config.ssoClientID);
+ 	Utils::scopy(ec->ssoProvider, sizeof(ec->ssoProvider), _config.ssoProvider);
++	ec->truncated = _config.truncated | (_configTooLarge ? ZT_NETWORK_CONFIG_TOO_LARGE : 0);
+ }
+ 
+ void Network::_sendUpdatesToMembers(void* tPtr, const MulticastGroup* const newMulticastGroup)
+diff --git a/node/Network.hpp b/node/Network.hpp
+index f7d1c7e97..61f5b70a7 100644
+--- a/node/Network.hpp
++++ b/node/Network.hpp
+@@ -492,6 +492,7 @@ class Network {
+ 
+ 	bool _destroyed;
+ 
++	bool _configTooLarge;	// the controller's config exceeds ZT_NETWORKCONFIG_DICT_CAPACITY
+ 	enum { NETCONF_FAILURE_NONE, NETCONF_FAILURE_ACCESS_DENIED, NETCONF_FAILURE_NOT_FOUND, NETCONF_FAILURE_INIT_FAILED, NETCONF_FAILURE_AUTHENTICATION_REQUIRED } _netconfFailure;
+ 	int _portError;	  // return value from port config callback
+ 	std::string _authenticationURL;
+diff --git a/node/NetworkConfig.cpp b/node/NetworkConfig.cpp
+index a569f281c..51b3bde56 100644
+--- a/node/NetworkConfig.cpp
++++ b/node/NetworkConfig.cpp
+@@ -33,6 +33,7 @@ NetworkConfig::NetworkConfig()
+ 	, capabilityCount(0)
+ 	, tagCount(0)
+ 	, certificateOfOwnershipCount(0)
++	, truncated(0)
+ 	, capabilities()
+ 	, tags()
+ 	, certificatesOfOwnership()
+@@ -487,6 +488,9 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 						if (this->capabilityCount < ZT_MAX_NETWORK_CAPABILITIES) {
+ 							this->capabilities[this->capabilityCount++] = cap;
+ 						}
++						else {
++							this->truncated |= ZT_NETWORK_CONFIG_TRUNCATED_CAPABILITIES;
++						}
+ 					}
+ 				}
+ 				catch (...) {
+@@ -503,6 +507,9 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 						if (this->tagCount < ZT_MAX_NETWORK_TAGS) {
+ 							this->tags[this->tagCount++] = tag;
+ 						}
++						else {
++							this->truncated |= ZT_NETWORK_CONFIG_TRUNCATED_TAGS;
++						}
+ 					}
+ 				}
+ 				catch (...) {
+@@ -519,6 +526,7 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 					else {
+ 						CertificateOfOwnership foo;
+ 						p += foo.deserialize(*tmp, p);
++						this->truncated |= ZT_NETWORK_CONFIG_TRUNCATED_CERTIFICATES;
+ 					}
+ 				}
+ 			}
+@@ -529,6 +537,9 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 					if (specialistCount < ZT_MAX_NETWORK_SPECIALISTS) {
+ 						this->specialists[this->specialistCount++] = tmp->at<uint64_t>(p);
+ 					}
++					else {
++						this->truncated |= ZT_NETWORK_CONFIG_TRUNCATED_SPECIALISTS;
++					}
+ 					p += 8;
+ 				}
+ 			}
+@@ -544,6 +555,9 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 					p += 2;
+ 					++this->routeCount;
+ 				}
++				if (p < tmp->size()) {
++					this->truncated |= ZT_NETWORK_CONFIG_TRUNCATED_ROUTES;
++				}
+ 			}
+ 
+ 			if (d.get(ZT_NETWORKCONFIG_DICT_KEY_STATIC_IPS, *tmp)) {
+@@ -551,12 +565,18 @@ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACI
+ 				while ((p < tmp->size()) && (staticIpCount < ZT_MAX_ZT_ASSIGNED_ADDRESSES)) {
+ 					p += this->staticIps[this->staticIpCount++].deserialize(*tmp, p);
+ 				}
++				if (p < tmp->size()) {
++					this->truncated |= ZT_NETWORK_CONFIG_TRUNCATED_ADDRESSES;
++				}
+ 			}
+ 
+ 			if (d.get(ZT_NETWORKCONFIG_DICT_KEY_RULES, *tmp)) {
+ 				this->ruleCount = 0;
+ 				unsigned int p = 0;
+ 				Capability::deserializeRules(*tmp, p, this->rules, this->ruleCount, ZT_MAX_NETWORK_RULES);
++				if (p < tmp->size()) {
++					this->truncated |= ZT_NETWORK_CONFIG_TRUNCATED_RULES;
++				}
+ 			}
+ 
+ 			if (d.get(ZT_NETWORKCONFIG_DICT_KEY_DNS, *tmp)) {
+diff --git a/node/NetworkConfig.hpp b/node/NetworkConfig.hpp
+index 50dfaa385..b55e6942e 100644
+--- a/node/NetworkConfig.hpp
++++ b/node/NetworkConfig.hpp
+@@ -546,6 +546,11 @@ class NetworkConfig {
+ 	 */
+ 	unsigned int certificateOfOwnershipCount;
+ 
++	/**
++	 * ZT_NETWORK_CONFIG_TRUNCATED_* bits set by fromDictionary() (not serialized)
++	 */
++	unsigned int truncated;
++
+ 	/**
+ 	 * Specialist devices
+ 	 *

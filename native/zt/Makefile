@@ -1,0 +1,83 @@
+# ZeroTier's core (third_party/ZeroTierOne/node, patched by patches/zerotier-*)
+# and the glue around it, as one static library.
+#
+#   make -C native/zt PLATFORM=switch    inside the ztnx-build image
+#   make -C native/zt PLATFORM=host      Linux or macOS, for tests and e2e
+#
+# Output: $(OUT)/libztcore.a. The core is compiled with C++ exceptions, which
+# it needs; nothing else in the sysmodule is.
+PLATFORM ?= host
+ZT  ?= ../../third_party/ZeroTierOne
+OUT ?= ../../target/zt-$(PLATFORM)
+
+# The Switch's limits. Hosts build with the same ones, so tests see the same
+# sizes and the same truncation. A network that needs more than these gets the
+# "config too large" flag (patches/zerotier-0006).
+LIMITS := -DZT_RX_QUEUE_SIZE=8 -DZT_MAX_NETWORK_RULES=64 -DZT_MAX_NETWORK_SPECIALISTS=16 \
+          -DZT_MAX_NETWORK_ROUTES=32 -DZT_MAX_NETWORK_CAPABILITIES=8 -DZT_MAX_NETWORK_TAGS=8 \
+          -DZT_MAX_ZT_ASSIGNED_ADDRESSES=8 -DZT_NETWORK_MAX_INCOMING_UPDATES=1 \
+          -DZT_MAX_PEER_NETWORK_PATHS=8 \
+          -DZT_NO_LOCAL_IDENTITY_VALIDATION -DZT_NO_THREADS
+
+# Not built: x86 AES, metrics, bonding and the threaded multiplexer. The last
+# three are replaced by the headers in stubs/, force-included so that the
+# real headers' include guards are already taken.
+NODE_SRCS := $(filter-out $(addprefix $(ZT)/node/,AES_aesni.cpp Metrics.cpp Bond.cpp PacketMultiplexer.cpp),$(wildcard $(ZT)/node/*.cpp))
+GLUE_SRCS := $(wildcard *.cpp) stubs/PacketMultiplexer.cpp
+
+COMMON := -MMD -MP -g -ffunction-sections -fdata-sections -fno-strict-aliasing -fwrapv -fexceptions \
+          -std=gnu++17 -Wall -Wno-deprecated -Wno-unused-variable \
+          -DNDEBUG -DZT_NO_PEER_METRICS $(LIMITS) \
+          -I$(ZT)/node -I$(ZT)/include -I$(ZT) -isystem $(ZT)/ext -I.
+# In this order: the later stubs include core headers that need the mutex.
+STUBS  := -include stubs/Metrics.hpp -include stubs/OSUtils.hpp -include stubs/Bond.hpp \
+          -include stubs/PacketMultiplexer.hpp
+
+ifeq ($(PLATFORM),switch)
+  DEVKITPRO ?= /opt/devkitpro
+  CXX := $(DEVKITPRO)/devkitA64/bin/aarch64-none-elf-g++
+  AR  := $(DEVKITPRO)/devkitA64/bin/aarch64-none-elf-gcc-ar
+  # Atmosphère's sysmodule flags (config/common.mk and stratosphere.mk) minus
+  # -fno-exceptions. -Os: the core is 430 KB of the image.
+  CXXFLAGS := $(COMMON) -include stubs/Mutex.hpp $(STUBS) \
+              -march=armv8-a+crypto -mtune=cortex-a57 -mtp=soft -fPIE -Os -fno-rtti \
+              -D__SWITCH__ -DZT_NO_TYPE_PUNNING -DZT_ARCH_ARM_HAS_NEON \
+              -DZT_SECURE_RANDOM_HOOK=ztnx_secure_random \
+              -D_MT_ALLOCATOR_H -D_POOL_ALLOCATOR_H -D_EXTPTR_ALLOCATOR_H -D_DEBUG_ALLOCATOR_H \
+              -I$(DEVKITPRO)/libnx/include -Istubs/sys-include \
+              $(EXTRA_CXXFLAGS)
+else
+  CXX ?= c++
+  AR  ?= ar
+  CXXFLAGS := $(COMMON) $(STUBS) -O2 -pthread $(EXTRA_CXXFLAGS)
+  ifneq ($(filter aarch64 arm64,$(shell uname -m)),)
+    CXXFLAGS += -DZT_NO_TYPE_PUNNING -DZT_ARCH_ARM_HAS_NEON -march=armv8-a+crypto
+  else
+    NODE_SRCS += $(ZT)/node/AES_aesni.cpp
+    CXXFLAGS += -msse -msse2 -maes -mpclmul
+  endif
+endif
+
+OBJS := $(patsubst $(ZT)/node/%.cpp,$(OUT)/obj/node/%.o,$(NODE_SRCS)) \
+        $(patsubst %.cpp,$(OUT)/obj/glue/%.o,$(GLUE_SRCS))
+
+all: $(OUT)/libztcore.a
+
+$(OUT)/libztcore.a: $(OBJS)
+	@rm -f $@
+	$(AR) rcs $@ $^
+
+$(OUT)/obj/node/%.o: $(ZT)/node/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(OUT)/obj/glue/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	rm -rf -- $(OUT)
+
+.PHONY: all clean
+
+-include $(OBJS:.o=.d)

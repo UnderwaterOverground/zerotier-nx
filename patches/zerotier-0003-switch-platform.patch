@@ -1,0 +1,48 @@
+diff --git a/node/Utils.cpp b/node/Utils.cpp
+index 705b6bd46..f37b32ae4 100644
+--- a/node/Utils.cpp
++++ b/node/Utils.cpp
+@@ -15,6 +15,11 @@
+ #include <sys/stat.h>
+ #include <time.h>
+ 
++#ifdef ZT_SECURE_RANDOM_HOOK
++// The embedder's random source, for platforms without /dev/urandom. It must
++// be cryptographically secure and must not fail.
++extern "C" void ZT_SECURE_RANDOM_HOOK(void* buf, unsigned int bytes);
++#endif
+ #ifdef __UNIX_LIKE__
+ #include <dirent.h>
+ #include <errno.h>
+@@ -93,8 +98,9 @@ const char Utils::HEXCHARS[16] = { '0', '1', '2', '3', '4', '5', '6', '7', '8',
+ #ifdef ZT_ARCH_ARM_HAS_NEON
+ Utils::ARMCapabilities::ARMCapabilities() noexcept
+ {
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(__SWITCH__)
+ 
++	// No auxv on Horizon; the Switch's Cortex-A57 has the ARMv8 crypto extensions.
+ 	this->aes = true;
+ 	this->crc32 = true;
+ 	this->pmull = true;
+@@ -259,7 +265,19 @@ void Utils::getSecureRandom(void* buf, unsigned int bytes)
+ 		((uint8_t*)buf)[i] = randomBuf[randomPtr++];
+ 	}
+ 
+-#else	// not __WINDOWS__
++#elif defined(ZT_SECURE_RANDOM_HOOK)
++
++	for (unsigned int i = 0; i < bytes; ++i) {
++		if (randomPtr >= sizeof(randomBuf)) {
++			ZT_SECURE_RANDOM_HOOK(randomBuf, sizeof(randomBuf));
++			randomPtr = 0;
++			s20.crypt12(randomBuf, randomBuf, sizeof(randomBuf));
++			s20.init(randomBuf, randomBuf);
++		}
++		((uint8_t*)buf)[i] = randomBuf[randomPtr++];
++	}
++
++#else	// not __WINDOWS__, no ZT_SECURE_RANDOM_HOOK
+ 
+ 	static int devURandomFd = -1;
+ 

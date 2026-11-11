@@ -26,6 +26,7 @@ applied is skipped). The patched files stay MPL 2.0.
 | `zerotier-0005-config-bounds.patch` | Bounds checks when reading capabilities and tags from a network config, and when reporting multicast subscriptions. |
 | `zerotier-0006-config-truncated-flag.patch` | `ZT_VirtualNetworkConfig::truncated`: says which parts of a config did not fit the build's limits, or that it was too large to receive. |
 | `zerotier-0007-identity-external-buffer.patch` | `Identity::generate()` can use a caller's 2 MB buffer; with `ZT_NO_LOCAL_IDENTITY_VALIDATION` a node without an identity fails instead of generating one. |
+| `zerotier-0008-rx-fragment-size.patch` | With `ZT_RX_FRAGMENT_MAX`, the receive queue keeps a packet's later fragments as payloads of at most that size instead of in whole-packet buffers (10 KB each, six per entry); larger fragments are dropped. |
 
 Headers in `native/zt/stubs/` replace upstream ones at build time by taking
 their include guards: no-op metrics and bonding, a multiplexer without threads,

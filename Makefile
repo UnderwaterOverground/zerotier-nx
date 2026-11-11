@@ -99,7 +99,7 @@ zt-selftest: zt-host
 	$(CXX) -o target/zt-selftest target/zt_selftest.o target/zt-host/libztcore.a
 	target/zt-selftest
 
-# Then holds its memory at exactly 4 MB (tools/footprint.sh resizes the heap
+# Then holds its memory at exactly tools/footprint.sh's target (it resizes the heap
 # and asks for one more build when the code size moved).
 sysmodule: rust-switch zt-switch $(LIBSTRAT)
 	$(SW) make -C switch/sysmodule ZTNX_BUILD_UNIX=$(BUILD_UNIX) dist

@@ -1,0 +1,52 @@
+--- a/node/Switch.cpp
++++ b/node/Switch.cpp
+@@ -105,6 +105,11 @@
+ 					const unsigned int fragmentNumber = fragment.fragmentNumber();
+ 					const unsigned int totalFragments = fragment.totalFragments();
+ 
++#ifdef ZT_RX_FRAGMENT_MAX
++					if (fragment.payloadLength() > ZT_RX_FRAGMENT_MAX) {
++						return;
++					}
++#endif
+ 					if ((totalFragments <= ZT_MAX_PACKET_FRAGMENTS) && (fragmentNumber < ZT_MAX_PACKET_FRAGMENTS) && (fragmentNumber > 0) && (totalFragments > 1)) {
+ 						// Fragment appears basically sane. Its fragment number must be
+ 						// 1 or more, since a Packet with fragmented bit set is fragment 0.
+--- a/node/Switch.hpp
++++ b/node/Switch.hpp
+@@ -219,7 +219,35 @@
+ 		volatile int64_t timestamp;	  // 0 if entry is not in use
+ 		volatile uint64_t packetId;
+ 		IncomingPacket frag0;								   // head of packet
++#ifdef ZT_RX_FRAGMENT_MAX
++		// Later fragments (if any), payload only. A fragment is one datagram,
++		// so it needs nowhere near a whole packet's room; larger ones are
++		// refused where they arrive.
++		struct StoredFragment {
++			StoredFragment() : len(0)
++			{
++			}
++			inline StoredFragment& operator=(const Packet::Fragment& f)
++			{
++				len = f.payloadLength();
++				memcpy(data, f.payload(), len);
++				return *this;
++			}
++			inline const unsigned char* payload() const
++			{
++				return data;
++			}
++			inline unsigned int payloadLength() const
++			{
++				return len;
++			}
++			unsigned int len;
++			unsigned char data[ZT_RX_FRAGMENT_MAX];
++		};
++		StoredFragment frags[ZT_MAX_PACKET_FRAGMENTS - 1];
++#else
+ 		Packet::Fragment frags[ZT_MAX_PACKET_FRAGMENTS - 1];   // later fragments (if any)
++#endif
+ 		unsigned int totalFragments;						   // 0 if only frag0 received, waiting for frags
+ 		uint32_t haveFragments;								   // bit mask, LSB to MSB
+ 		volatile bool complete;								   // if true, packet is complete

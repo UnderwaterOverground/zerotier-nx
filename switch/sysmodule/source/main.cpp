@@ -109,7 +109,7 @@ namespace ams {
 
         // Heap for ZeroTier's core, the Rust stack, the driver and our own
         // allocations, sized at build time so the whole sysmodule takes
-        // exactly 4 MB (heap_size.h).
+        // exactly tools/footprint.sh's target (heap_size.h).
         constexpr size_t MallocBufferSize = ZTNX_HEAP_SIZE;
         static_assert(MallocBufferSize % os::MemoryPageSize == 0);
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];

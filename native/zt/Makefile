@@ -45,7 +45,7 @@ ifeq ($(PLATFORM),switch)
   # Atmosphère's sysmodule flags (config/common.mk and stratosphere.mk) minus
   # -fno-exceptions. -Os: the core is 430 KB of the image.
   CXXFLAGS := $(COMMON) -include stubs/Mutex.hpp $(STUBS) \
-              -march=armv8-a+crypto -mtune=cortex-a57 -mtp=soft -fPIE -Os -fno-rtti \
+              -march=armv8-a+crypto -mtune=cortex-a57 -mtp=soft -fPIE -Os -fno-rtti -flto \
               -D__SWITCH__ -DZT_NO_TYPE_PUNNING -DZT_ARCH_ARM_HAS_NEON \
               -DZT_SECURE_RANDOM_HOOK=ztnx_secure_random \
               -D_MT_ALLOCATOR_H -D_POOL_ALLOCATOR_H -D_EXTPTR_ALLOCATOR_H -D_DEBUG_ALLOCATOR_H \

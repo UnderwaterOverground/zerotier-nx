@@ -20,8 +20,10 @@ ZT_LIB_DIR	?=	$(abspath $(SYSMODULE_DIR)/../../target/zt-switch)
 # No newlib stdio/printf: state files go through ams::fs, and the shared C
 # code's snprintf is routed to libstratosphere's formatter (see
 # ztnx_snprintf in main.cpp and ztnx_driver.h).
-CFLAGS		+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -Wno-error=sign-compare -DZTNX_NO_STDIO
-CXXFLAGS	+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -DZTNX_NO_STDIO
+# -Os after the template's -O2: this code is small and none of it is hot
+# enough for the difference to show (the speed test's per-call figures).
+CFLAGS		+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -Wno-error=sign-compare -DZTNX_NO_STDIO -Os
+CXXFLAGS	+=	-DZTNX_BUILD_UNIX=$(ZTNX_BUILD_UNIX) -DZTNX_NO_STDIO -Os
 LIBS		:=	-lztnx_ffi -lztcore $(LIBS)
 
 # ZeroTier's core uses C++ exceptions. Atmosphère's template links every

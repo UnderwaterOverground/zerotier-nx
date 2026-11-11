@@ -21,7 +21,7 @@ p384 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 rsa = { version = "0.9", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
-smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ip", "proto-ipv4", "proto-ipv6", "socket-tcp", "socket-icmp", "auto-icmp-echo-reply"] }
+smoltcp = { version = "0.14", default-features = false, features = ["alloc", "medium-ip", "proto-ipv4", "socket-tcp", "socket-icmp", "auto-icmp-echo-reply"] }
 log = { version = "0.4", default-features = false }
 spin = { version = "0.9", default-features = false, features = ["mutex", "spin_mutex"] }
 

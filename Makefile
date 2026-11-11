@@ -6,7 +6,10 @@ SWITCH_TARGET := aarch64-nintendo-switch-freestanding
 # Build time: a floor for "is the console's clock plausible" (TLS needs it).
 BUILD_UNIX := $(shell date +%s)
 export ZTNX_BUILD_UNIX := $(BUILD_UNIX)
-RUST_SWITCH_FLAGS := --release --target $(SWITCH_TARGET) -Zbuild-std=core,alloc
+RUST_SWITCH_FLAGS := --release --target $(SWITCH_TARGET) -Zbuild-std=core,alloc -Zbuild-std-features=optimize_for_size
+# A panic aborts at once, without formatting a message nobody would see:
+# that keeps core's formatting code out of the sysmodule.
+RUST_SWITCH_RUSTFLAGS := -Zunstable-options -Cpanic=immediate-abort
 DOCKER_IMAGE := ztnx-build
 
 ifeq ($(IN_DOCKER),1)
@@ -56,7 +59,7 @@ docker-image:
 	docker build -t $(DOCKER_IMAGE) docker
 
 rust-switch:
-	$(SW) cargo build -p ztnx-ffi $(RUST_SWITCH_FLAGS)
+	$(SW) env RUSTFLAGS="$(RUST_SWITCH_RUSTFLAGS)" cargo build -p ztnx-ffi $(RUST_SWITCH_FLAGS)
 
 nro: rust-switch
 	$(SW) make -C switch/app ZTNX_BUILD_UNIX=$(BUILD_UNIX)

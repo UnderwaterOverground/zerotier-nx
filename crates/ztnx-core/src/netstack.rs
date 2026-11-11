@@ -241,8 +241,12 @@ fn smol_now(now: Instant) -> smoltcp::time::Instant {
     smoltcp::time::Instant::from_micros((now.as_nanos() / 1000) as i64)
 }
 
-fn endpoint(addr: SocketAddr) -> IpEndpoint {
-    IpEndpoint::new(addr.ip().into(), addr.port())
+/// The stack speaks IPv4 only (smoltcp is built without IPv6).
+fn endpoint(addr: SocketAddr) -> Option<IpEndpoint> {
+    match addr.ip() {
+        IpAddr::V4(v4) => Some(IpEndpoint::new(IpAddress::Ipv4(v4), addr.port())),
+        IpAddr::V6(_) => None,
+    }
 }
 
 fn socket_addr(ep: IpEndpoint) -> SocketAddr {
@@ -278,7 +282,6 @@ impl Netstack {
         // Everything not on-link goes "out the tunnel"; with Medium::Ip the
         // gateway is never resolved, it only has to exist.
         let _ = iface.routes_mut().add_default_ipv4_route(core::net::Ipv4Addr::new(192, 0, 2, 1));
-        let _ = iface.routes_mut().add_default_ipv6_route(core::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
         iface
     }
 
@@ -309,11 +312,9 @@ impl Netstack {
         self.iface.update_ip_addrs(|cidrs| {
             cidrs.clear();
             for a in addrs {
-                let cidr = match a {
-                    IpAddr::V4(v4) => IpCidr::new(IpAddress::Ipv4(*v4), 32),
-                    IpAddr::V6(v6) => IpCidr::new(IpAddress::Ipv6(*v6), 128),
-                };
-                let _ = cidrs.push(cidr);
+                if let IpAddr::V4(v4) = a {
+                    let _ = cidrs.push(IpCidr::new(IpAddress::Ipv4(*v4), 32));
+                }
             }
         });
     }
@@ -414,10 +415,11 @@ impl Netstack {
     // ---- socket API ------------------------------------------------------
 
     pub fn tcp_connect(&mut self, remote: SocketAddr) -> Result<SockId, NetError> {
+        let remote = endpoint(remote).ok_or(NetError::Invalid)?;
         let handle = self.new_tcp()?;
         let port = self.ephemeral_port();
         let sock = self.sockets.get_mut::<tcp::Socket>(handle);
-        if sock.connect(self.iface.context(), endpoint(remote), port).is_err() {
+        if sock.connect(self.iface.context(), remote, port).is_err() {
             self.remove_tcp(handle);
             return Err(NetError::Invalid);
         }
@@ -1350,18 +1352,13 @@ mod tests {
 
     #[test]
     fn udp_checksums_are_valid() {
-        use smoltcp::wire::{IpAddress, Ipv4Packet, Ipv6Packet, UdpPacket};
+        use smoltcp::wire::{IpAddress, Ipv4Packet, UdpPacket};
         let v4 = udp::build("100.64.0.1:5000".parse().unwrap(), "100.64.0.2:53".parse().unwrap(), b"hello", DEFAULT_MTU).unwrap();
         let ip = Ipv4Packet::new_checked(&v4[..]).unwrap();
         assert!(ip.verify_checksum());
         let u = UdpPacket::new_checked(ip.payload()).unwrap();
         assert!(u.verify_checksum(&IpAddress::Ipv4(ip.src_addr()), &IpAddress::Ipv4(ip.dst_addr())));
         assert_eq!(u.payload(), b"hello");
-
-        let v6 = udp::build("[fd7a:115c:a1e0::1]:5000".parse().unwrap(), "[fd7a:115c:a1e0::2]:7".parse().unwrap(), b"odd", DEFAULT_MTU).unwrap();
-        let ip = Ipv6Packet::new_checked(&v6[..]).unwrap();
-        let u = UdpPacket::new_checked(ip.payload()).unwrap();
-        assert!(u.verify_checksum(&IpAddress::Ipv6(ip.src_addr()), &IpAddress::Ipv6(ip.dst_addr())));
 
         let d = udp::parse(&v4).unwrap();
         assert_eq!(d.dst, "100.64.0.2:53".parse().unwrap());

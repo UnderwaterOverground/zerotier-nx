@@ -8,14 +8,14 @@
 # Exit 3: heap_size.h was rewritten; rebuild. Other: an error.
 set -eu
 cd "$(dirname "$0")/.."
-# 2364 KB. Lower it by what a change saves, never by squeezing the heap below
+# 2312 KB. Lower it by what a change saves, never by squeezing the heap below
 # what a console showed: read "heap: ... peak ... largest free" in its log
 # after joining from cold, joining from the stored config, and under load.
 # At 3064 KB (before the config buffers, the reply table and pending
 # multicasts were cut by about 90 KB idle and more at the peaks, and before
 # the update check's TLS left the heap) it held 470 KB idle and peaked at
 # 732. overlay_budget_kb adds up to 384 KB for apps' sockets.
-target=$((0x24F000))
+target=$((0x242000))
 min_heap=$((832 * 1024))
 elf=switch/sysmodule/zerotier-nx.elf
 header=switch/sysmodule/source/heap_size.h

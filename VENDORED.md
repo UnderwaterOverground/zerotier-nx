@@ -28,6 +28,7 @@ applied is skipped). The patched files stay MPL 2.0.
 | `zerotier-0007-identity-external-buffer.patch` | `Identity::generate()` can use a caller's 2 MB buffer; with `ZT_NO_LOCAL_IDENTITY_VALIDATION` a node without an identity fails instead of generating one. |
 | `zerotier-0008-rx-fragment-size.patch` | With `ZT_RX_FRAGMENT_MAX`, the receive queue keeps a packet's later fragments as payloads of at most that size instead of in whole-packet buffers (10 KB each, six per entry); larger fragments are dropped. |
 | `zerotier-0009-small-statics.patch` | Two static buffers: the random generator's 64 KB one gets a size (`ZT_SECURE_RANDOM_BUFFER_SIZE`), and with `ZT_NETWORKCONFIG_RESET_IN_PLACE` a network config is cleared in place instead of from a 45 KB empty copy. |
+| `zerotier-0010-ed25519-no-base-table.patch` | With `ZT_ED25519_NO_BASE_TABLE`, multiples of Ed25519's base point are computed by the routine verification uses instead of from a 109 KB table. Slower and not constant-time: acceptable only because a network member makes its own key pair and signs nothing. |
 
 Headers in `native/zt/stubs/` replace upstream ones at build time by taking
 their include guards: no-op metrics and bonding, a multiplexer without threads,

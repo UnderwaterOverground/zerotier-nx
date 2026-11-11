@@ -597,5 +597,29 @@ extern "C" uint32_t ztnx_engine_selftest(void)
 		}
 	}
 
+	// A signature made with an identity from stock ZeroTier must verify
+	// against the public key stock ZeroTier computed for it. Signing
+	// multiplies the curve's base point, which this build does without the
+	// usual table (patches/zerotier-0010); so does making an identity.
+	try {
+		// A throwaway made with zerotier-idtool for this test, used nowhere.
+		static const char kTestIdentity[] =
+			"900bc5c5c0:0:69e9037cb0f3efe92b20932bbddc2012b173f4127af3ebb4e199c41bdf8a2d1ff2d46a58a1aadcbd8a69e7ce4abdb2e2a3ec883c7b831bfee327080758"
+			"bd3ab3:31619d0c2c366ea02b00c153bf23756f427095f33284e4d1c971d7a2a128d5f5b11d8dbe875687852c3bc98e0d2480379dcbc822e64832b241e2b462f6c0e95f";
+		static const char kMessage[] = "zerotier-nx self-test";
+		const ZeroTier::Identity id(kTestIdentity);
+		ZeroTier::ECC::Signature sig = id.sign(kMessage, sizeof(kMessage));
+		if (! id.verify(kMessage, sizeof(kMessage), sig)) {
+			failed |= 16;
+		}
+		sig.data[7] ^= 1;
+		if (id.verify(kMessage, sizeof(kMessage), sig)) {
+			failed |= 16;
+		}
+	}
+	catch (...) {
+		failed |= 16;
+	}
+
 	return failed;
 }

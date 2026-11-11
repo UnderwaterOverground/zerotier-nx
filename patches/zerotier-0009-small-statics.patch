@@ -1,0 +1,52 @@
+--- a/node/NetworkConfig.cpp
++++ b/node/NetworkConfig.cpp
+@@ -6,6 +6,7 @@
+  * https://www.zerotier.com/
+  */
+ 
++#include <new>
+ #include "NetworkConfig.hpp"
+ 
+ #include "DNS.hpp"
+@@ -366,11 +367,20 @@
+ 
+ bool NetworkConfig::fromDictionary(const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>& d)
+ {
++#ifndef ZT_NETWORKCONFIG_RESET_IN_PLACE
+ 	static const NetworkConfig NIL_NC;
++#endif
+ 	Buffer<ZT_NETWORKCONFIG_DICT_CAPACITY>* tmp = new Buffer<ZT_NETWORKCONFIG_DICT_CAPACITY>();
+ 
+ 	try {
++#ifdef ZT_NETWORKCONFIG_RESET_IN_PLACE
++		// What assigning an empty config gives (padding zeroed too: configs
++		// are compared with memcmp), without keeping one in static memory.
++		memset(static_cast<void*>(this), 0, sizeof(NetworkConfig));
++		new (this) NetworkConfig();
++#else
+ 		*this = NIL_NC;
++#endif
+ 
+ 		// Fields that are always present, new or old
+ 		this->networkId = d.getUI(ZT_NETWORKCONFIG_DICT_KEY_NETWORK_ID, 0);
+--- a/node/Utils.cpp
++++ b/node/Utils.cpp
+@@ -215,12 +215,17 @@
+ 	return s;
+ }
+ 
++// How much random data is fetched (and whitened) at a time.
++#ifndef ZT_SECURE_RANDOM_BUFFER_SIZE
++#define ZT_SECURE_RANDOM_BUFFER_SIZE 65536
++#endif
++
+ void Utils::getSecureRandom(void* buf, unsigned int bytes)
+ {
+ 	static Mutex globalLock;
+ 	static Salsa20 s20;
+ 	static bool s20Initialized = false;
+-	static uint8_t randomBuf[65536];
++	static uint8_t randomBuf[ZT_SECURE_RANDOM_BUFFER_SIZE];
+ 	static unsigned int randomPtr = sizeof(randomBuf);
+ 
+ 	Mutex::Lock _l(globalLock);

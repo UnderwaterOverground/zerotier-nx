@@ -1422,10 +1422,12 @@ namespace ams {
                 Log("heap by size (KB/allocs): %s", classes);
                 const auto zt = link->GetStats();
                 const auto loop = rt->GetStats();
-                Log("zerotier: datagrams in %llu out %llu (failed %llu), frames in %llu out %llu; arp broadcasts %u (held back %u), unresolved %u, "
-                    "unroutable %u; loop rounds %llu, wake-ups %llu",
+                unsigned int ttl_failures = 0;
+                const int send_errno = ztnx_driver_send_error(driver, &ttl_failures);
+                Log("zerotier: datagrams in %llu out %llu (failed %llu: %u hop limits, last errno %d), frames in %llu out %llu; arp broadcasts %u (held back %u), "
+                    "unresolved %u, unroutable %u; loop rounds %llu, wake-ups %llu",
                     static_cast<unsigned long long>(zt.wire_in), static_cast<unsigned long long>(zt.wire_out),
-                    static_cast<unsigned long long>(zt.wire_out_failed), static_cast<unsigned long long>(zt.frames_in),
+                    static_cast<unsigned long long>(zt.wire_out_failed), ttl_failures, send_errno, static_cast<unsigned long long>(zt.frames_in),
                     static_cast<unsigned long long>(zt.frames_out), net.arp_broadcasts, net.arp_limited, net.unresolved, net.unroutable,
                     static_cast<unsigned long long>(loop.rounds), static_cast<unsigned long long>(loop.wakes));
                 stack_watch::Log();

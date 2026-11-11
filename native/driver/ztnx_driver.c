@@ -53,6 +53,10 @@ struct ZtnxDriver {
     // socket service's errno, if a call failed); misses: batches that came
     // back empty while recvfrom then found a datagram.
     int mmsg_state, mmsg_errno, mmsg_misses;
+    // Why the last failed send failed: its errno, negated if it was the hop
+    // limit that couldn't be set; and how many of those there were.
+    int send_errno;
+    unsigned int send_ttl_failures;
 };
 
 uint64_t ztnx_driver_now_ns(void) {
@@ -164,7 +168,12 @@ int ztnx_driver_send(ZtnxDriver *d, uint32_t ip_be, uint16_t port, const void *d
     if (ttl) {
         const int hops = (int)ttl;
         limited = setsockopt(d->udp_fd, IPPROTO_IP, IP_TTL, &hops, sizeof hops) == 0;
-        if (!limited) return -1;  // sent at full range it would be the wrong packet
+        if (!limited) {
+            // Sent at full range it would be the wrong packet.
+            d->send_errno = -errno;
+            d->send_ttl_failures++;
+            return -1;
+        }
     }
     // A full socket buffer drops the datagram.
     const ssize_t sent = sendto(d->udp_fd, data, len, 0, (struct sockaddr *)&sin, sizeof sin);
@@ -172,7 +181,14 @@ int ztnx_driver_send(ZtnxDriver *d, uint32_t ip_be, uint16_t port, const void *d
         const int hops = 64;
         setsockopt(d->udp_fd, IPPROTO_IP, IP_TTL, &hops, sizeof hops);
     }
-    return sent == (ssize_t)len ? 0 : -1;
+    if (sent == (ssize_t)len) return 0;
+    d->send_errno = sent < 0 ? errno : EMSGSIZE;
+    return -1;
+}
+
+int ztnx_driver_send_error(const ZtnxDriver *d, unsigned int *ttl_failures) {
+    if (ttl_failures) *ttl_failures = d->send_ttl_failures;
+    return d->send_errno;
 }
 
 // Reads one datagram into buf. Returns its length, or -1 when there's

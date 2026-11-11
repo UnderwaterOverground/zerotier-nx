@@ -26,6 +26,10 @@ void ztnx_driver_free(ZtnxDriver *d);
 int ztnx_driver_open_udp(ZtnxDriver *d, uint16_t port);
 // The port the UDP socket is bound to (0 if none).
 uint16_t ztnx_driver_udp_port(const ZtnxDriver *d);
+// Why the last failed send failed: its errno, negated if it was setting a
+// packet's hop limit that failed (those packets are then not sent at all;
+// ttl_failures counts them). 0 if none has failed.
+int ztnx_driver_send_error(const ZtnxDriver *d, unsigned int *ttl_failures);
 
 // The last place the driver entered (a static string, NULL before any): if
 // the thread driving it seems stuck, this names where it went last.

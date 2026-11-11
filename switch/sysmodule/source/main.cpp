@@ -731,17 +731,28 @@ namespace ams {
             return addr;
         }
 
+        // Sends the lines logged so far over UDP through a socket that is
+        // closed again at once. Until the identity exists nothing of ours
+        // handles sleep (StartPowerHandling comes later), and the console
+        // can't sleep with a socket of ours open: omm aborts.
+        void SendEarlyLogBriefly() {
+            std::scoped_lock lk(g_log_mutex);
+            if (g_log_udp_addr.sin_family != AF_INET || g_early_log_done || g_early_log_len == 0 || g_log_udp_fd >= 0) return;
+            const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+            if (fd < 0) return;
+            g_log_udp_fd = fd;
+            SendLogLines(g_early_log, g_early_log_len);
+            g_log_udp_fd = -1;
+            ::close(fd);
+            g_early_log_len = 0;
+        }
+
         // Returns this console's ZeroTier address: the identity on the card,
         // or a new one, made once the console has finished starting up and
         // has the memory to spare. Until then it waits here (also for an
         // identity.secret made on a PC to appear).
         u64 EnsureIdentity() {
             if (const u64 addr = LoadIdentity()) return addr;
-            // The wait can be long and nothing else has started: show it in
-            // the log as it happens (no network of ours yet, so the log's
-            // address can only be reached directly).
-            StartUdpLog();
-            FlushEarlyLog();
             const u64 entered = armTicksToNs(armGetSystemTick());
             bool healthy = false;
             Log("identity: none yet; one is made %llu s after power-on, when %llu MB of system memory is free",
@@ -751,6 +762,9 @@ namespace ams {
             for (u32 round = 0;; round++) {
                 const u64 now = armTicksToNs(armGetSystemTick());  // counts from power-on
                 WatchBootMemory(now);
+                // The wait can be long and nothing else has started: show it
+                // in the log as it happens.
+                SendEarlyLogBriefly();
                 if (!healthy && now - entered > HealthyAfterNs) {
                     // Waiting isn't crashing: reboots during a long wait
                     // mustn't trip the crash guard.

@@ -1,4 +1,4 @@
-// ZeroTier overlay: status, peers, pause, config and stop/start for the
+// ZeroTier overlay: status, devices, pause and stop/start for the
 // zerotier-nx sysmodule, through its ztnx:ctl service (native/ctl/ztnx_ctl.h).
 #define TESLA_INIT_IMPL
 #include <tesla.hpp>
@@ -39,9 +39,9 @@ namespace {
             bool status_ok = false;
             ZtnxCtlStatus status = {};
             char last_error[192] = {};
-            char conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
-            ZtnxPeerInfo peers[ZTNX_CTL_MAX_PEERS] = {};
-            u32 peer_count = 0;  // configured, which can be more than fit in peers
+            char net_name[ZTNX_CTL_NAME_MAX] = {};
+            ZtnxCtlPeer peers[ZTNX_CTL_MAX_PEERS] = {};
+            u32 peer_count = 0;  // all of them, which can be more than fit in peers
         };
 
         Thread g_thread;
@@ -57,12 +57,6 @@ namespace {
         std::atomic<bool> g_stop_done{false};
         Result g_stop_rc = 0;
         u32 g_stop_code = 0;
-        std::atomic<bool> g_set_conf{false};       // a SetConf to send (g_conf_to_set, under g_mutex)
-        std::atomic<bool> g_set_conf_done{false};
-        char g_conf_to_set[ZTNX_CTL_CONF_NAME_MAX] = {};
-        char g_conf_set[ZTNX_CTL_CONF_NAME_MAX] = {};  // the name the last SetConf was for
-        Result g_set_conf_rc = 0;
-        u32 g_set_conf_code = 0;
         std::atomic<u64> g_call_since{0};  // system tick the current request began, 0: none
 
         Service g_session;  // the thread's own
@@ -102,7 +96,7 @@ namespace {
                 if (!s.status_ok) Close();  // the process went away
             }
             if (s.status_ok) GetString(2, s.last_error, sizeof s.last_error);
-            if (s.status_ok) GetString(5, s.conf_name, sizeof s.conf_name);
+            if (s.status_ok) GetString(5, s.net_name, sizeof s.net_name);
             if (s.status_ok) {
                 u32 n = 0;
                 const Result rc = Call([&] {
@@ -145,20 +139,6 @@ namespace {
                 if (g_open && paused >= 0) {
                     const u8 v = static_cast<u8>(paused);
                     Call([&] { return serviceDispatchIn(&g_session, 1, v); });
-                }
-                if (g_open && g_set_conf.exchange(false)) {
-                    static char name[ZTNX_CTL_CONF_NAME_MAX];
-                    mutexLock(&g_mutex);
-                    std::snprintf(name, sizeof name, "%s", g_conf_to_set);
-                    mutexUnlock(&g_mutex);
-                    u32 code = 0;
-                    g_set_conf_rc = Call([&] {
-                        return serviceDispatchOut(&g_session, 6, code, .buffer_attrs = {SfBufferAttr_HipcMapAlias | SfBufferAttr_In},
-                                                  .buffers = {{name, std::strlen(name)}});
-                    });
-                    g_set_conf_code = code;
-                    std::snprintf(g_conf_set, sizeof g_conf_set, "%s", name);
-                    g_set_conf_done = true;
                 }
                 Refresh();
                 if (paused >= 0) g_pause_pending = false;
@@ -431,56 +411,17 @@ namespace {
     }
 
     char g_last_error[192] = {};
-    char g_conf_name[ZTNX_CTL_CONF_NAME_MAX] = {};
-    ZtnxPeerInfo g_peers[ZTNX_CTL_MAX_PEERS] = {};
-    u32 g_peer_count = 0;  // configured; the first (up to ZTNX_CTL_MAX_PEERS) are in g_peers
+    char g_net_name[ZTNX_CTL_NAME_MAX] = {};
+    ZtnxCtlPeer g_peers[ZTNX_CTL_MAX_PEERS] = {};
+    u32 g_peer_count = 0;  // all of them; the first (up to ZTNX_CTL_MAX_PEERS) are in g_peers
     u32 g_peers_shown = 0;  // how many are in g_peers
-    u8 g_by_name[ZTNX_CTL_MAX_PEERS] = {};  // g_peers indices in name order
+    u8 g_order[ZTNX_CTL_MAX_PEERS] = {};  // g_peers indices in the order listed
 
     void CtlSetPaused(bool paused) {
         if (!g_have_ctl || g_phase != Phase::Idle) return;
         ctl::g_pause_pending = true;
         ctl::g_set_paused = paused;
         ctl::Wake();
-    }
-
-    // Asks the sysmodule to switch to another .conf; the outcome lands in
-    // the message drawer (see Poll).
-    void CtlSetConf(const char *name) {
-        if (!g_have_ctl || g_phase != Phase::Idle) return;
-        mutexLock(&ctl::g_mutex);
-        std::snprintf(ctl::g_conf_to_set, sizeof ctl::g_conf_to_set, "%s", name);
-        mutexUnlock(&ctl::g_mutex);
-        ctl::g_set_conf_done = false;
-        ctl::g_set_conf = true;
-        ctl::Wake();
-        Note("Switching...");
-    }
-
-    void FinishSetConf() {
-        ctl::g_set_conf_done = false;
-        char line[96];
-        if (R_FAILED(ctl::g_set_conf_rc)) {
-            Say("No answer from zerotier-nx.", "Try again in a moment.");
-            return;
-        }
-        switch (ctl::g_set_conf_code) {
-            case ZTNX_CTL_CONF_OK:
-                std::snprintf(line, sizeof line, "Switched to %s.", ctl::g_conf_set);
-                Note(line);
-                break;
-            case ZTNX_CTL_CONF_NOT_FOUND:
-                std::snprintf(line, sizeof line, "%s: not found.", ctl::g_conf_set);
-                Say(line);
-                break;
-            case ZTNX_CTL_CONF_INVALID:
-                std::snprintf(line, sizeof line, "%s doesn't load:", ctl::g_conf_set);
-                Say(line, "see the status above.");
-                break;
-            default:
-                Say("Busy; try again in a moment.");
-                break;
-        }
     }
 
     // Takes the ctl thread's latest answers.
@@ -493,12 +434,19 @@ namespace {
         std::memcpy(g_peers, s.peers, sizeof g_peers);
         g_peer_count = s.peer_count;
         g_peers_shown = std::min<u32>(g_peer_count, ZTNX_CTL_MAX_PEERS);
-        for (u32 i = 0; i < g_peers_shown; i++) g_by_name[i] = static_cast<u8>(i);
-        // Listed by name, so rows stay put as traffic moves between peers.
-        std::sort(g_by_name, g_by_name + g_peers_shown, [](u8 a, u8 b) { return std::strcmp(g_peers[a].name, g_peers[b].name) < 0; });
+        for (u32 i = 0; i < g_peers_shown; i++) g_order[i] = static_cast<u8>(i);
+        // In a fixed order, so rows stay put: named devices by name, the
+        // others by address, ZeroTier's own servers last.
+        std::sort(g_order, g_order + g_peers_shown, [](u8 a, u8 b) {
+            const ZtnxCtlPeer &x = g_peers[a], &y = g_peers[b];
+            const int kx = x.role == ZTNX_CTL_PEER_PLANET ? 2 : x.name[0] ? 0 : 1;
+            const int ky = y.role == ZTNX_CTL_PEER_PLANET ? 2 : y.name[0] ? 0 : 1;
+            if (kx != ky) return kx < ky;
+            if (const int c = std::strcmp(x.name, y.name); c != 0) return c < 0;
+            return x.address < y.address;
+        });
         std::snprintf(g_last_error, sizeof g_last_error, "%s", s.last_error);
-        std::snprintf(g_conf_name, sizeof g_conf_name, "%s", s.conf_name);
-        if (ctl::g_set_conf_done) FinishSetConf();
+        std::snprintf(g_net_name, sizeof g_net_name, "%s", s.net_name);
     }
 
     // "12 s ago", "4 min ago", "2 h ago".
@@ -507,14 +455,6 @@ namespace {
         else if (secs < 3600) std::snprintf(out, cap, "%u min ago", secs / 60);
         else if (secs < 86400) std::snprintf(out, cap, "%u h ago", secs / 3600);
         else std::snprintf(out, cap, "%u d ago", secs / 86400);
-    }
-
-    // "1.2 MB", "340 KB", "12 B".
-    void Bytes(u64 n, char *out, size_t cap) {
-        if (n >= 1'000'000'000) std::snprintf(out, cap, "%llu.%llu GB", static_cast<unsigned long long>(n / 1'000'000'000), static_cast<unsigned long long>(n / 100'000'000 % 10));
-        else if (n >= 1'000'000) std::snprintf(out, cap, "%llu.%llu MB", static_cast<unsigned long long>(n / 1'000'000), static_cast<unsigned long long>(n / 100'000 % 10));
-        else if (n >= 1000) std::snprintf(out, cap, "%llu KB", static_cast<unsigned long long>(n / 1000));
-        else std::snprintf(out, cap, "%llu B", static_cast<unsigned long long>(n));
     }
 
     // ---- drawing ------------------------------------------------------------
@@ -585,23 +525,24 @@ namespace {
         }
     }
 
-    // A peer's state in a few words: when it last handshook, or why not.
-    void PeerState(const ZtnxPeerInfo &p, char *out, size_t cap) {
-        if (p.last_handshake_s != UINT32_MAX) {
-            Ago(p.last_handshake_s, out, cap);
-        } else if (p.flags & ZTNX_PEER_RESOLVING) {
-            std::snprintf(out, cap, "Resolving...");
-        } else if (!p.endpoint_port) {
-            std::snprintf(out, cap, "Waiting for it");
-        } else {
-            std::snprintf(out, cap, "No handshake");
-        }
+    // What a device is called: its configured name, else its ZeroTier
+    // address.
+    void PeerLabel(const ZtnxCtlPeer &p, char *out, size_t cap) {
+        if (p.name[0]) std::snprintf(out, cap, "%s", p.name);
+        else if (p.role == ZTNX_CTL_PEER_PLANET) std::snprintf(out, cap, "ZeroTier server %010llx", static_cast<unsigned long long>(p.address));
+        else std::snprintf(out, cap, "%010llx", static_cast<unsigned long long>(p.address));
     }
 
-    // Green: a session; yellow: had one; grey: never.
-    tsl::Color StateColor(const ZtnxPeerInfo &p) {
-        if (p.flags & ZTNX_PEER_SESSION) return Green;
-        return p.last_handshake_s != UINT32_MAX ? Yellow : Grey;
+    // How a device is reached, in a few words.
+    void PeerState(const ZtnxCtlPeer &p, char *out, size_t cap) {
+        if (!p.direct) std::snprintf(out, cap, "Relayed");
+        else if (p.latency_ms >= 0) std::snprintf(out, cap, "Direct, %d ms", static_cast<int>(p.latency_ms));
+        else std::snprintf(out, cap, "Direct");
+    }
+
+    // Green: a direct path; yellow: through ZeroTier's relays (slower).
+    tsl::Color StateColor(const ZtnxCtlPeer &p) {
+        return p.direct ? Green : Yellow;
     }
 
     // No internet connection (not while paused or stopping: then it's moot).
@@ -642,13 +583,21 @@ namespace {
         if (g_status_ok) {
             switch (g_status.state) {
                 case ZTNX_CTL_STARTING:    state = "Starting...";   color = Blue;   break;
-                case ZTNX_CTL_CONNECTING:  state = "Connecting..."; color = Blue;   break;
-                case ZTNX_CTL_CONNECTED:   state = g_status.peers_up ? "Connected" : "Idle"; color = g_status.peers_up ? Green : Yellow; break;
+                case ZTNX_CTL_CONNECTING:
+                    switch (g_status.net_status) {
+                        case ZTNX_CTL_NET_ACCESS_DENIED:  state = "Not authorized";  color = Yellow; break;
+                        case ZTNX_CTL_NET_NOT_FOUND:      state = "No such network"; color = Red;    break;
+                        case ZTNX_CTL_NET_AUTH_REQUIRED:  state = "Sign-in needed";  color = Red;    break;
+                        case ZTNX_CTL_NET_CLIENT_TOO_OLD: state = "Not supported";   color = Red;    break;
+                        default:                          state = "Connecting...";   color = Blue;   break;
+                    }
+                    break;
+                case ZTNX_CTL_CONNECTED:   state = "Connected";     color = Green;  break;
                 case ZTNX_CTL_PAUSED:      state = "Paused";        color = Grey;   break;
                 case ZTNX_CTL_STOPPING:    state = "Stopping...";   color = Grey;   break;
             }
             if ((g_status.flags & ZTNX_CTL_FLAG_CONF_ERROR) && g_status.state != ZTNX_CTL_PAUSED && g_status.state != ZTNX_CTL_STOPPING) {
-                state = (g_status.flags & ZTNX_CTL_FLAG_CONF_MISSING) ? "No config" : "Config error";
+                state = "No network set";
                 color = Red;
             }
             if (Offline()) {
@@ -660,7 +609,7 @@ namespace {
             }
         }
         r->drawString(state, false, x + 20, y + 40, 30, r->a(color));
-        char line[128];
+        char line[128], extra[64];
         if (!g_status_ok) {
             if (g_crashed[0]) {
                 // "zerotier-nx stopped itself: <why>." -> show the reason.
@@ -690,11 +639,7 @@ namespace {
             return;
         }
         if ((g_status.flags & ZTNX_CTL_FLAG_CONF_ERROR) && g_status.state != ZTNX_CTL_PAUSED) {
-            // "wg0.conf: line 12: PublicKey: not valid base64"
-            DrawTwoLines(r, g_last_error[0] ? g_last_error : "The .conf didn't load.", x + 20, y + 75, 15, Grey, 46);
-            // A missing one's message already says what to do.
-            if (!(g_status.flags & ZTNX_CTL_FLAG_CONF_MISSING))
-                r->drawString("Fix it, or pick another one under Config.", false, x + 20, y + 120, 15, r->a(Grey));
+            DrawTwoLines(r, g_last_error[0] ? g_last_error : "Add network=<its 16-digit ID> to config/zerotier-nx/config.ini and restart.", x + 20, y + 75, 15, Grey, 46);
             return;
         }
         if (Stalled()) {
@@ -704,30 +649,63 @@ namespace {
             r->drawString("Restart the console if this continues.", false, x + 20, y + 102, 17, r->a(Grey));
             return;
         }
+        const unsigned long long node = g_status.node, nwid = g_status.nwid;
+        if (g_status.state == ZTNX_CTL_CONNECTING) {
+            // Joining: where it stands, and what the user can do about it.
+            const char *second = "", *third = "";
+            switch (g_status.net_status) {
+                case ZTNX_CTL_NET_ACCESS_DENIED:
+                    std::snprintf(line, sizeof line, "Authorize %010llx", node);
+                    r->drawString(line, false, x + 20, y + 77, 20, r->a(White));
+                    r->drawString("in the network's member list (for most", false, x + 20, y + 102, 15, r->a(Grey));
+                    r->drawString("networks: my.zerotier.com).", false, x + 20, y + 122, 15, r->a(Grey));
+                    return;
+                case ZTNX_CTL_NET_NOT_FOUND:
+                    std::snprintf(line, sizeof line, "Network %016llx doesn't exist.", nwid);
+                    second = "Check network= in config.ini.";
+                    break;
+                case ZTNX_CTL_NET_AUTH_REQUIRED:
+                    std::snprintf(line, sizeof line, "This network asks for single sign-on,");
+                    second = "which zerotier-nx can't do.";
+                    break;
+                case ZTNX_CTL_NET_CLIENT_TOO_OLD:
+                    std::snprintf(line, sizeof line, "This network needs a newer ZeroTier");
+                    second = "than zerotier-nx has.";
+                    break;
+                default:
+                    if (g_status.flags & ZTNX_CTL_FLAG_NO_ROOTS) {
+                        std::snprintf(line, sizeof line, "ZeroTier's servers don't answer.");
+                        second = "Some networks block it (UDP).";
+                    } else {
+                        std::snprintf(line, sizeof line, "Asking the network's controller...");
+                        std::snprintf(extra, sizeof extra, "This Switch: %010llx", node);
+                        second = extra;
+                    }
+                    break;
+            }
+            r->drawString(line, false, x + 20, y + 75, 17, r->a(Grey));
+            if (second[0]) r->drawString(second, false, x + 20, y + 100, 17, r->a(Grey));
+            if (third[0]) r->drawString(third, false, x + 20, y + 125, 17, r->a(Grey));
+            return;
+        }
         // Our address only while it's usable (it stays known while paused).
         s32 ly = y + 75;
         const u8 *ip = g_status.ipv4;
-        if (ip[0] && g_status.state == ZTNX_CTL_CONNECTED) {
-            std::snprintf(line, sizeof line, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
-            r->drawString(line, false, x + 20, ly, 20, r->a(White));
-            ly += 27;
+        if (g_status.state == ZTNX_CTL_CONNECTED) {
+            if (ip[0]) {
+                std::snprintf(line, sizeof line, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+                r->drawString(line, false, x + 20, ly, 20, r->a(White));
+                ly += 27;
+            }
+            if (g_status.peers == 0) std::snprintf(line, sizeof line, "No other device seen yet.");
+            else std::snprintf(line, sizeof line, "%u device%s, %u reached directly", g_status.peers, g_status.peers == 1 ? "" : "s", g_status.peers_up);
+            r->drawString(line, false, x + 20, ly, 17, r->a(Grey));
+            ly += 25;
+            // Rules, routes or addresses beyond what this build holds.
+            if (g_status.truncated) r->drawString("Some of the network's settings didn't fit.", false, x + 20, ly, 15, r->a(Yellow));
+            return;
         }
-        if (g_status.state == ZTNX_CTL_CONNECTED && g_status.peers_up == 0) {
-            std::snprintf(line, sizeof line, "No peer has answered in the last 3 minutes.");
-        } else if (g_status.state == ZTNX_CTL_CONNECTED) {
-            std::snprintf(line, sizeof line, "%u of %u peer%s up", g_status.peers_up, g_status.peers, g_status.peers == 1 ? "" : "s");
-        } else if (g_status.state == ZTNX_CTL_CONNECTING) {
-            std::snprintf(line, sizeof line, g_status.peers ? "No handshake yet (%u peer%s)." : "No peers in the .conf.", g_status.peers, g_status.peers == 1 ? "" : "s");
-        } else {
-            std::snprintf(line, sizeof line, "%u peer%s", g_status.peers, g_status.peers == 1 ? "" : "s");
-        }
-        r->drawString(line, false, x + 20, ly, 17, r->a(Grey));
-        ly += 28;
-        if (g_last_error[0] && g_status.state != ZTNX_CTL_CONNECTED && g_status.state != ZTNX_CTL_PAUSED) {
-            char error[sizeof g_last_error + 16];
-            std::snprintf(error, sizeof error, "Last error: %s", g_last_error);
-            DrawTwoLines(r, error, x + 20, ly, 15, Grey, 46);
-        }
+        if (g_last_error[0] && g_status.state != ZTNX_CTL_PAUSED) DrawTwoLines(r, g_last_error, x + 20, ly, 15, Grey, 46);
     }
 
     // What's active, and the memory line.
@@ -738,9 +716,9 @@ namespace {
             ty += 28;
         };
         if (!g_status_ok) return;
-        if (g_status.flags & ZTNX_CTL_FLAG_MITM) line("Homebrew apps reach tunnel addresses.", White);
-        if (g_status.flags & ZTNX_CTL_FLAG_HOSTS) line("Peer names resolve (e.g. in Moonlight).", White);
-        if (g_status.state == ZTNX_CTL_PAUSED) line("Paused: tunnel connections fail until resumed.", Grey);
+        if (g_status.flags & ZTNX_CTL_FLAG_MITM) line("Homebrew apps reach the network.", White);
+        if (g_status.flags & ZTNX_CTL_FLAG_HOSTS) line("Names from config.ini resolve (Moonlight).", White);
+        if (g_status.state == ZTNX_CTL_PAUSED) line("Paused: the network is unreachable.", Grey);
         if (g_status.memory_kb) {
             char mem[96];
             std::snprintf(mem, sizeof mem, "Memory: %u.%u MB. System free: %u.%u MB.", g_status.memory_kb / 1024,
@@ -794,65 +772,58 @@ namespace {
 
     // ---- GUI ----------------------------------------------------------------
 
-    // The Connections page: every peer in use, a row each, in name order:
-    // its name, and how it's reached at the right.
+    // The Devices page: every device ZeroTier is in contact with, a row
+    // each: what it's called, and how it's reached at the right.
     // One element that scrolls itself: Tesla's lists scroll by moving focus
     // between items, and items can't safely come and go while one has it,
-    // but peers come and go all the time.
-    // The peer whose details page is open.
-    char g_detail_name[sizeof(ZtnxPeerInfo::name)] = {};
+    // but devices come and go all the time.
+    // The device whose details page is open.
+    u64 g_detail_address = 0;
+    char g_detail_label[48] = {};
 
     void DrawPeer(tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
-        const ZtnxPeerInfo *p = nullptr;
+        const ZtnxCtlPeer *p = nullptr;
         for (u32 i = 0; i < g_peers_shown; i++)
-            if (std::strcmp(g_peers[i].name, g_detail_name) == 0) p = &g_peers[i];
+            if (g_peers[i].address == g_detail_address) p = &g_peers[i];
         if (!p) {
-            r->drawString("This peer is no longer in the .conf.", false, x + 20, y + 30, 17, r->a(Grey));
+            r->drawString("No longer in contact with it.", false, x + 20, y + 30, 17, r->a(Grey));
             return;
         }
         s32 ty = y + 30;
         auto line = [&](const char *label, const char *value, tsl::Color c) {
             r->drawString(label, false, x + 20, ty, 17, r->a(Grey));
-            r->drawString(value, false, x + 20 + 150, ty, 17, r->a(c));
+            r->drawString(value, false, x + 20 + 130, ty, 17, r->a(c));
             ty += 30;
         };
         char v[64];
         PeerState(*p, v, sizeof v);
-        line("Handshake", v, StateColor(*p));
-        if (p->ipv4[0] || p->ipv4[1] || p->ipv4[2] || p->ipv4[3]) std::snprintf(v, sizeof v, "%u.%u.%u.%u", p->ipv4[0], p->ipv4[1], p->ipv4[2], p->ipv4[3]);
-        else std::snprintf(v, sizeof v, "(no /32 in AllowedIPs)");
-        line("Address", v, White);
-        if (p->endpoint_port) {
-            std::snprintf(v, sizeof v, "%u.%u.%u.%u:%u%s", p->endpoint_ip[0], p->endpoint_ip[1], p->endpoint_ip[2], p->endpoint_ip[3], p->endpoint_port,
-                          (p->flags & ZTNX_PEER_ROAMED) ? " (moved)" : (p->flags & ZTNX_PEER_ENDPOINT_NAME) ? " (by name)" : "");
-        } else if (p->flags & ZTNX_PEER_RESOLVING) {
-            std::snprintf(v, sizeof v, "resolving its name...");
-        } else {
-            std::snprintf(v, sizeof v, "none: it must contact us");
+        line("Reached", v, StateColor(*p));
+        std::snprintf(v, sizeof v, "%010llx", static_cast<unsigned long long>(p->address));
+        line("ZeroTier ID", v, White);
+        if (p->ipv4[0] || p->ipv4[1] || p->ipv4[2] || p->ipv4[3]) {
+            std::snprintf(v, sizeof v, "%u.%u.%u.%u", p->ipv4[0], p->ipv4[1], p->ipv4[2], p->ipv4[3]);
+            line("Address", v, White);
         }
-        line("Endpoint", v, White);
-        if (p->last_rx_s != UINT32_MAX) Ago(p->last_rx_s, v, sizeof v);
-        else std::snprintf(v, sizeof v, "never");
-        line("Last packet", v, White);
-        char rx[24], tx[24];
-        Bytes(p->rx_bytes, rx, sizeof rx);
-        Bytes(p->tx_bytes, tx, sizeof tx);
-        std::snprintf(v, sizeof v, "%s in, %s out", rx, tx);
-        line("Transfer", v, White);
-        if (p->keepalive_s) std::snprintf(v, sizeof v, "every %u s", p->keepalive_s);
-        else std::snprintf(v, sizeof v, "off");
-        line("Keepalive", v, White);
-        std::snprintf(v, sizeof v, "%u prefix%s%s", p->allowed_ips, p->allowed_ips == 1 ? "" : "es", (p->flags & ZTNX_PEER_DEFAULT_ROUTE) ? " (default route)" : "");
-        line("Allowed IPs", v, White);
-        line("Preshared key", (p->flags & ZTNX_PEER_PSK) ? "yes" : "no", White);
+        if (p->direct) std::snprintf(v, sizeof v, "%u.%u.%u.%u:%u", p->path_ip[0], p->path_ip[1], p->path_ip[2], p->path_ip[3], p->path_port);
+        else std::snprintf(v, sizeof v, "ZeroTier's relays");
+        line("Through", v, White);
+        if (p->direct) {
+            Ago(p->last_rx_ms / 1000, v, sizeof v);
+            line("Last packet", v, White);
+        }
+        if (p->version[0] || p->version[1] || p->version[2]) {
+            std::snprintf(v, sizeof v, "%u.%u.%u", p->version[0], p->version[1], p->version[2]);
+            line("Version", v, White);
+        }
+        line("Kind", p->role == ZTNX_CTL_PEER_PLANET ? "ZeroTier server" : p->role == ZTNX_CTL_PEER_MOON ? "Moon (own server)" : "Device", White);
     }
 
     class PeerGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", g_detail_name);
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", g_detail_label);
                 auto *list = new tsl::elm::List();
-                list->addItem(new Drawer(DrawPeer), 290);
+                list->addItem(new Drawer(DrawPeer), 240);
                 frame->setContent(list);
                 return frame;
             }
@@ -867,51 +838,77 @@ namespace {
             u32 m_frames = 0;
     };
 
-    // The .conf files in config/zerotier-nx, to switch between. The list
-    // is built once when the page opens (Tesla's items can't come and go
-    // while one has focus).
-    class ConfGui : public tsl::Gui {
+    // The network joined, and this Switch on it.
+    void DrawNetwork(tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
+        if (!g_status_ok) {
+            r->drawString("Not running.", false, x + 20, y + 30, 17, r->a(Grey));
+            return;
+        }
+        s32 ty = y + 30;
+        auto line = [&](const char *label, const char *value, tsl::Color c) {
+            r->drawString(label, false, x + 20, ty, 17, r->a(Grey));
+            if (value[0]) r->drawString(value, false, x + 20 + 130, ty, 17, r->a(c));  // see DrawMessage
+            ty += 30;
+        };
+        char v[ZTNX_CTL_NAME_MAX + 4];
+        if (g_net_name[0]) {
+            Fit(r, g_net_name, 17, w - 170, v, sizeof v);
+            line("Name", v, White);
+        }
+        if (g_status.nwid) {
+            std::snprintf(v, sizeof v, "%016llx", static_cast<unsigned long long>(g_status.nwid));
+            line("Network ID", v, White);
+        } else {
+            line("Network ID", "none in config.ini", Red);
+        }
+        std::snprintf(v, sizeof v, "%010llx", static_cast<unsigned long long>(g_status.node));
+        line("This Switch", v, White);
+        const u8 *ip = g_status.ipv4;
+        if (ip[0]) {
+            std::snprintf(v, sizeof v, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+            line("Address", v, White);
+        }
+        const char *status = "";
+        tsl::Color color = Grey;
+        if (g_status.nwid) switch (g_status.net_status) {
+            case ZTNX_CTL_NET_REQUESTING:     status = "asking its controller"; break;
+            case ZTNX_CTL_NET_OK:             status = "joined"; color = Green; break;
+            case ZTNX_CTL_NET_ACCESS_DENIED:  status = "not authorized yet"; color = Yellow; break;
+            case ZTNX_CTL_NET_NOT_FOUND:      status = "no such network"; color = Red; break;
+            case ZTNX_CTL_NET_AUTH_REQUIRED:  status = "wants single sign-on"; color = Red; break;
+            case ZTNX_CTL_NET_CLIENT_TOO_OLD: status = "needs a newer ZeroTier"; color = Red; break;
+            default:                          status = "down"; break;
+        }
+        if (status[0]) line("Status", status, color);
+        if (g_status.truncated) {
+            r->drawString("Some of its settings didn't fit: rules,", false, x + 20, ty + 8, 15, r->a(Yellow));
+            r->drawString("routes or addresses beyond what", false, x + 20, ty + 28, 15, r->a(Yellow));
+            r->drawString("zerotier-nx holds. See sysmodule.log.", false, x + 20, ty + 48, 15, r->a(Yellow));
+        }
+    }
+
+    class NetworkGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Config");
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Network");
                 auto *list = new tsl::elm::List();
-                struct Name {
-                    char s[ZTNX_CTL_CONF_NAME_MAX];
-                };
-                static Name names[16];
-                int n = 0;
-                tsl::hlp::doWithSDCardHandle([&] {
-                    if (DIR *d = opendir("sdmc:/config/zerotier-nx")) {
-                        while (dirent *e = readdir(d)) {
-                            const size_t len = std::strlen(e->d_name);
-                            if (n >= 16 || len < 6 || len >= ZTNX_CTL_CONF_NAME_MAX || std::strcmp(e->d_name + len - 5, ".conf") != 0) continue;
-                            std::snprintf(names[n++].s, ZTNX_CTL_CONF_NAME_MAX, "%s", e->d_name);
-                        }
-                        closedir(d);
-                    }
-                });
-                std::sort(names, names + n, [](const Name &a, const Name &b) { return std::strcmp(a.s, b.s) < 0; });
-                if (n == 0) {
-                    list->addItem(new tsl::elm::ListItem("No .conf files in config/zerotier-nx"));
-                }
-                for (int i = 0; i < n; i++) {
-                    const char *name = names[i].s;
-                    auto *item = new tsl::elm::ListItem(name, std::strcmp(name, g_conf_name) == 0 ? "Active" : "");
-                    item->setClickListener([name](u64 keys) {
-                        if (!(keys & HidNpadButton_A)) return false;
-                        CtlSetConf(name);
-                        tsl::goBack();
-                        return true;
-                    });
-                    list->addItem(item);
-                }
+                list->addItem(new Drawer(DrawNetwork), 250);
                 list->addItem(new Drawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
-                    r->drawString("Pick one to switch to it now and at every boot.", false, x + 20, y + 25, 15, r->a(Grey));
-                    r->drawString("Put more .conf files in config/zerotier-nx.", false, x + 20, y + 47, 15, r->a(Grey));
+                    r->drawString("The network is set with network= in", false, x + 20, y + 25, 15, r->a(Grey));
+                    r->drawString("config/zerotier-nx/config.ini.", false, x + 20, y + 47, 15, r->a(Grey));
                 }), 70);
                 frame->setContent(list);
                 return frame;
             }
+
+            void update() override {
+                if (++m_frames % 30 != 0) return;
+                Poll();
+                Refresh();
+            }
+
+        private:
+            u32 m_frames = 0;
     };
 
     class PeerTable : public tsl::elm::Element {
@@ -924,21 +921,23 @@ namespace {
                 }
                 char line[160];
                 if (g_peer_count > g_peers_shown) {
-                    std::snprintf(line, sizeof line, "%u peers in %s; the first %u are listed.", g_peer_count, g_conf_name, g_peers_shown);
+                    std::snprintf(line, sizeof line, "In contact with %u; the first %u are listed.", g_peer_count, g_peers_shown);
                 } else {
-                    std::snprintf(line, sizeof line, "Peers in %s. Press A for details.", g_conf_name[0] ? g_conf_name : "the .conf");
+                    std::snprintf(line, sizeof line, "Devices in contact. Press A for details.");
                 }
                 r->drawString(line, false, x + 20, y + 25, 15, r->a(Grey));
-                r->drawString("Green: a handshake in the last 3 minutes.", false, x + 20, y + 47, 15, r->a(Grey));
+                r->drawString("Green: direct. Yellow: relayed (slower).", false, x + 20, y + 47, 15, r->a(Grey));
                 const u32 n = g_peers_shown;
                 if (n == 0) {
-                    r->drawString("No peers configured.", false, x + 20, y + 95, 17, r->a(White));
+                    r->drawString("Nothing in contact yet.", false, x + 20, y + 95, 17, r->a(White));
                     return;
                 }
                 Follow(n);
                 const s32 top = y + RowsTop, visible = Visible(h);
                 for (u32 row = m_top; row < n && row < m_top + static_cast<u32>(visible); row++) {
-                    const ZtnxPeerInfo &p = g_peers[g_by_name[row]];
+                    const ZtnxCtlPeer &p = g_peers[g_order[row]];
+                    char label[48];
+                    PeerLabel(p, label, sizeof label);
                     const s32 ry = top + static_cast<s32>(row - m_top) * RowHeight;
                     if (row == m_sel) {
                         r->drawRect(x + 6, ry, w - 12, RowHeight, r->a(Selected));  // a 2-pixel border
@@ -947,7 +946,7 @@ namespace {
                     // The path at the right, the name at the left: each has
                     // what it needs, and when both are long, half the row.
                     const s32 left = x + 20, right = x + w - 20, gap = 14;
-                    const s32 half = (right - left - gap) / 2, name_w = p.name[0] ? TextWidth(r, p.name, 17) : 0;
+                    const s32 half = (right - left - gap) / 2, name_w = TextWidth(r, label, 17);
                     char full[48], path[48];
                     PeerState(p, full, sizeof full);
                     const s32 full_w = TextWidth(r, full, 17);
@@ -961,12 +960,11 @@ namespace {
                     } else {
                         r->drawString(path, false, right - TextWidth(r, path, 17), ry + 22, 17, r->a(StateColor(p)));
                     }
-                    if (!p.name[0]) continue;
                     if (row == m_sel && long_name && m_turn == NameTurn) {
-                        Marquee(r, p.name, left, ry, room, White);
+                        Marquee(r, label, left, ry, room, White);
                     } else {
-                        char name[sizeof p.name + 4];
-                        Fit(r, p.name, 17, room, name, sizeof name);
+                        char name[sizeof label + 4];
+                        Fit(r, label, 17, room, name, sizeof name);
                         if (name[0] && std::strcmp(name, "...") != 0) r->drawString(name, false, x + 20, ry + 22, 17, r->a(White));  // see DrawMessage
                     }
                 }
@@ -992,7 +990,8 @@ namespace {
             // Tesla's lists); B goes back.
             bool handleInput(u64 down_keys, u64 held, const HidTouchState &, HidAnalogStickState, HidAnalogStickState) override {
                 if ((down_keys & HidNpadButton_A) && g_peers_shown > 0) {
-                    std::snprintf(g_detail_name, sizeof g_detail_name, "%s", g_peers[g_by_name[m_sel]].name);
+                    g_detail_address = g_peers[g_order[m_sel]].address;
+                    PeerLabel(g_peers[g_order[m_sel]], g_detail_label, sizeof g_detail_label);
                     tsl::changeTo<PeerGui>();
                     return true;
                 }
@@ -1016,18 +1015,18 @@ namespace {
                 const s32 n = static_cast<s32>(g_peers_shown);
                 if (n == 0) return;
                 m_sel = static_cast<u32>(std::clamp(row, 0, n - 1));
-                std::snprintf(m_sel_name, sizeof m_sel_name, "%s", g_peers[g_by_name[m_sel]].name);
+                m_sel_address = g_peers[g_order[m_sel]].address;
                 m_scroll = 0;
                 m_wait = 0;
                 m_turn = NameTurn;
             }
 
-            // Keeps the selection on the same peer as others come and go, and
+            // Keeps the selection on the same device as others come and go, and
             // in view.
             void Follow(u32 n) {
                 u32 found = n;
-                for (u32 i = 0; i < n && m_sel_name[0]; i++) {
-                    if (std::strcmp(g_peers[g_by_name[i]].name, m_sel_name) == 0) found = i;
+                for (u32 i = 0; i < n && m_sel_address; i++) {
+                    if (g_peers[g_order[i]].address == m_sel_address) found = i;
                 }
                 if (found < n) m_sel = found;
                 else Select(static_cast<s32>(std::min(m_sel, n - 1)));
@@ -1066,7 +1065,7 @@ namespace {
             static constexpr u32 NameTurn = 0, PathTurn = 1;
 
             u32 m_sel = 0, m_top = 0;
-            char m_sel_name[sizeof(ZtnxPeerInfo::name)] = {};
+            u64 m_sel_address = 0;
             s32 m_scroll = 0, m_wait = 0;
             u32 m_turn = NameTurn;
             u32 m_repeat = 0;
@@ -1075,7 +1074,7 @@ namespace {
     class PeersGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
-                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Connections");
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Devices");
                 frame->setContent(new PeerTable());
                 return frame;
             }
@@ -1106,8 +1105,8 @@ namespace {
                 });
                 list->addItem(m_toggle);
 
-                // Every peer, and when it last handshook.
-                m_peers = new tsl::elm::ListItem("Connections", PeersValue());
+                // Every device in contact, and how it's reached.
+                m_peers = new tsl::elm::ListItem("Devices", PeersValue());
                 m_peers->setClickListener([](u64 keys) {
                     if (!(keys & HidNpadButton_A)) return false;
                     tsl::changeTo<PeersGui>();
@@ -1115,14 +1114,14 @@ namespace {
                 });
                 list->addItem(m_peers);
 
-                // Which .conf is in use; A picks another.
-                m_conf = new tsl::elm::ListItem("Config", g_conf_name[0] ? g_conf_name : "");
-                m_conf->setClickListener([](u64 keys) {
+                // The network joined; A shows its details and this Switch's ID.
+                m_net = new tsl::elm::ListItem("Network", NetValue());
+                m_net->setClickListener([](u64 keys) {
                     if (!(keys & HidNpadButton_A)) return false;
-                    tsl::changeTo<ConfGui>();
+                    tsl::changeTo<NetworkGui>();
                     return true;
                 });
-                list->addItem(m_conf);
+                list->addItem(m_net);
 
                 // Stop or start the sysmodule itself (not its boot setting).
                 m_power = new tsl::elm::ListItem(PowerLabel());
@@ -1171,11 +1170,11 @@ namespace {
                         m_peers_value = value;
                     }
                 }
-                if (m_conf) {
-                    const std::string value = g_status_ok && g_conf_name[0] ? g_conf_name : "";
-                    if (value != m_conf_value) {
-                        m_conf->setValue(value);
-                        m_conf_value = value;
+                if (m_net) {
+                    const std::string value = NetValue();
+                    if (value != m_net_value) {
+                        m_net->setValue(value);
+                        m_net_value = value;
                     }
                 }
                 if (m_power) {
@@ -1192,8 +1191,17 @@ namespace {
 
             static std::string PeersValue() {
                 if (!g_status_ok || g_status.state == ZTNX_CTL_STARTING) return "";
-                if (g_peer_count == 0) return "None";
-                return std::to_string(g_status.peers_up) + " of " + std::to_string(g_peer_count) + " up";
+                if (g_status.peers == 0) return "None";
+                return std::to_string(g_status.peers_up) + " of " + std::to_string(g_status.peers) + " direct";
+            }
+
+            // The network's name once its controller has said it, else its ID.
+            static std::string NetValue() {
+                if (!g_status_ok || !g_status.nwid) return "";
+                if (g_net_name[0]) return g_net_name;
+                char id[20];
+                std::snprintf(id, sizeof id, "%016llx", static_cast<unsigned long long>(g_status.nwid));
+                return id;
             }
 
             static Action PowerAction() {
@@ -1217,8 +1225,8 @@ namespace {
             tsl::elm::ToggleListItem *m_toggle = nullptr;
             tsl::elm::ListItem *m_peers = nullptr;
             std::string m_peers_value;
-            tsl::elm::ListItem *m_conf = nullptr;
-            std::string m_conf_value;
+            tsl::elm::ListItem *m_net = nullptr;
+            std::string m_net_value;
             tsl::elm::ListItem *m_power = nullptr;
             const char *m_power_label = nullptr;
             u32 m_frames = 0;

@@ -1,5 +1,5 @@
 // ztnx:ctl, the zerotier-nx sysmodule's control service (status, peers,
-// pause, config, stop). Shared by the sysmodule and its clients (the overlay).
+// pause, stop). Shared by the sysmodule and its clients (the overlay).
 //
 //   cmd 0  GetStatus()                -> ZtnxCtlStatus (raw)
 //   cmd 1  SetPaused(u8 paused)
@@ -10,13 +10,11 @@
 //          exits shortly after replying: close the session and wait for it
 //          to be gone before starting it again.
 //   cmd 4  GetPeers(out buffer)       -> u32 count. Fills the buffer with up
-//          to ZTNX_CTL_MAX_PEERS ZtnxPeerInfo (fewer if it's smaller): every
-//          peer of the active .conf, in its order. The count is how many
-//          there are, which can be more than were written.
-//   cmd 5  GetConfName(out buffer)    -> u32 length: the active .conf's file
-//          name ("wg0.conf"), "" if none could be loaded.
-//   cmd 6  SetConf(in buffer name)    -> u32 ZTNX_CTL_CONF_*: loads another
-//          .conf from config/zerotier-nx and makes it the default.
+//          to ZTNX_CTL_MAX_PEERS ZtnxCtlPeer (fewer if it's smaller): what
+//          ZeroTier is in contact with, its root servers included. The
+//          count is how many there are, which can be more than were written.
+//   cmd 5  GetNetworkName(out buffer) -> u32 length: the joined network's
+//          name as its controller gave it, "" until then.
 #pragma once
 #include <stdint.h>
 

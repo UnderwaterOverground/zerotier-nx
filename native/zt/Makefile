@@ -65,6 +65,15 @@ OBJS := $(patsubst $(ZT)/node/%.cpp,$(OUT)/obj/node/%.o,$(NODE_SRCS)) \
 
 all: $(OUT)/libztcore.a
 
+# Every object is rebuilt when the compiler or its flags change (a limit
+# above, say): the stamp's name carries their checksum.
+FLAGS_STAMP := $(OUT)/flags.$(shell echo '$(CXX) $(CXXFLAGS)' | cksum | cut -d' ' -f1)
+$(FLAGS_STAMP):
+	@mkdir -p $(OUT)
+	@rm -f $(OUT)/flags.*
+	@touch $@
+$(OBJS): $(FLAGS_STAMP)
+
 $(OUT)/libztcore.a: $(OBJS)
 	@rm -f $@
 	$(AR) rcs $@ $^

@@ -36,6 +36,15 @@ bool MakeWakePair(int *rx, int *tx) {
     }
     fcntl(*rx, F_SETFL, fcntl(*rx, F_GETFL, 0) | O_NONBLOCK);
     fcntl(*tx, F_SETFL, fcntl(*tx, F_GETFL, 0) | O_NONBLOCK);
+#ifdef __SWITCH__
+    // One byte at a time goes through: on the console every socket's
+    // buffers come out of one small pool, so take the least.
+    for (const int fd : {*rx, *tx}) {
+        const int size = 0x1000;
+        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof size);
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof size);
+    }
+#endif
     return true;
 }
 

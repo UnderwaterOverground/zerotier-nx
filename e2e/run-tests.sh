@@ -68,6 +68,10 @@ shim client /out/vsock-test "$PEER_IP" 172.31.2.20:7 "$MAIN_IP" > "$ZTNX_STATE_D
 check "the socket patterns apps use (vsock-test)" test $? -eq 0
 sed 's/^/    /' "$ZTNX_STATE_DIR/client/vsock.log" | grep -v '^    PASS' | head -20
 check "curl fetches a page from the peer" sh -c "docker compose exec -T -e LD_PRELOAD=/out/libztnx_interpose.so -e ZTNX_STATE=/state/main -e ZTNX_NWID=$NW -e ZTNX_WAIT_READY=1 client curl -s -m 20 http://$PEER_IP:8080/ | grep -q 'hello from the peer'"
+# Fragments: 60 datagrams of 2000 bytes sent 2 ms apart, each echoed back in
+# two pieces that this side reassembles while the next ones arrive.
+BURST=$(shim client timeout 30 python3 /src/e2e/udp-burst.py "$PEER_IP" 60 2000 2>/dev/null | tail -1)
+check "a burst of 60 fragmented datagrams comes back (${BURST:-?} of 60, at least 57)" test "${BURST:-0}" -ge 57
 # A fresh iperf3 server: one whose last client vanished mid-test (a run that
 # was interrupted) answers "busy" for good.
 peer sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = iperf3 ] && kill -9 "${p#/proc/}"; done; iperf3 -s -D' >/dev/null 2>&1

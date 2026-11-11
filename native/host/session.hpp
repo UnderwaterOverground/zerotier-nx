@@ -21,7 +21,7 @@ struct HostOptions {
     bool log = false;           // print status changes to stderr
     // The sysmodule's engine thread has this much stack; the same here, so
     // code that needs more fails on the development machine too.
-    size_t engine_stack = 0x1C000;
+    size_t engine_stack = 0x1A000;
 };
 
 class HostSession {

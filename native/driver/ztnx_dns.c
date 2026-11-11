@@ -71,6 +71,13 @@ int ztnx_dns_query_a(uint32_t server_be, const char *host, uint32_t *out, int ti
     // Non-blocking: only poll() waits, and only for timeout_ms.
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#ifdef __SWITCH__
+    // A query and its answer fit 4 KB; the console's socket buffers all
+    // come out of one small pool.
+    const int size = 0x1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof size);
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof size);
+#endif
     struct sockaddr_in to;
     memset(&to, 0, sizeof to);
     to.sin_family = AF_INET;

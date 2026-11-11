@@ -3,7 +3,7 @@
     "program_id": "0x4200000000005A54",
     "program_id_range_min": "0x4200000000005A54",
     "program_id_range_max": "0x4200000000005A54",
-    "main_thread_stack_size": "0x1C000",
+    "main_thread_stack_size": "0x1A000",
     "main_thread_priority": 42,
     "default_cpu_id": 3,
     "version": "0.1.0",

@@ -33,6 +33,7 @@ applied is skipped). The patched files stay MPL 2.0.
 | `zerotier-0012-more-tunables.patch` | `ZT_MAX_MULTICAST_SUBSCRIPTIONS` (1024 entries in every `ZT_VirtualNetworkConfig`, 16 KB) and the reply-tracking table's bucket count (`ZT_EXPECTING_REPLIES_BUCKET_MASK1`, 32 KB at stock size) can be set from the command line. |
 | `zerotier-0013-save-received-config.patch` | A network config is stored as the dictionary the controller sent instead of being serialised again from the parsed form, which took two more dictionary-sized buffers. |
 | `zerotier-0014-compact-outbound-multicast.patch` | With `ZT_COMPACT_OUTBOUND_MULTICAST` a pending multicast holds its frame once (in the packet) instead of three times: 10 KB instead of 30. `ZT_MULTICAST_TX_QUEUE_SIZE` bounds a group's queue separately from the switch's, and expired entries are dropped when the next one is queued. |
+| `zerotier-0015-leaf-only.patch` | With `ZT_LEAF_ONLY` the node does only what a network member does: it doesn't relay packets addressed to others (or introduce their peers to each other), answer multicast gather requests, replicate multicasts, run the per-network queue management, or send as a controller. Sending to bridged devices and through multicast replicators stays. |
 
 Headers in `native/zt/stubs/` replace upstream ones at build time by taking
 their include guards: no-op metrics and bonding, a multiplexer without threads,
@@ -40,6 +41,6 @@ and on the Switch a mutex on libnx and the two `OSUtils` helpers the core uses.
 `stubs/Trace.cpp` is built instead of `node/Trace.cpp`: remote tracing, which a
 network's controller can switch on, does nothing here.
 
-The build's limits (`native/zt/Makefile`): receive queue 8, rules 64, routes 16,
+The build's limits (`native/zt/Makefile`): receive queue 4, rules 64, routes 16,
 specialists 16, capabilities 2, tags 8, assigned addresses 8, paths per peer 8,
 multicast subscriptions 64, 4 pending multicasts per group.

@@ -1,0 +1,130 @@
+--- a/node/IncomingPacket.cpp
++++ b/node/IncomingPacket.cpp
+@@ -1276,6 +1276,12 @@
+ 
+ bool IncomingPacket::_doMULTICAST_GATHER(const RuntimeEnvironment* RR, void* tPtr, const SharedPtr<Peer>& peer)
+ {
++#ifdef ZT_LEAF_ONLY
++	// Who is in a group is asked of roots, controllers and anchors, not of
++	// ordinary members: not answered.
++	peer->received(tPtr, _path, hops(), packetId(), payloadLength(), Packet::VERB_MULTICAST_GATHER, 0, Packet::VERB_NOP, false, 0, ZT_QOS_NO_FLOW);
++	return true;
++#endif
+ 	Metrics::pkt_multicast_gather_in++;
+ 	const uint64_t nwid = at<uint64_t>(ZT_PROTO_VERB_MULTICAST_GATHER_IDX_NETWORK_ID);
+ 	const unsigned int flags = (*this)[ZT_PROTO_VERB_MULTICAST_GATHER_IDX_FLAGS];
+@@ -1383,7 +1389,11 @@
+ 
+ 			const uint8_t* const frameData = (const uint8_t*)field(offset + ZT_PROTO_VERB_MULTICAST_FRAME_IDX_FRAME, frameLen);
+ 
++#ifdef ZT_LEAF_ONLY
++			if (false) {   // never a multicast replicator
++#else
+ 			if ((flags & 0x08) && (network->config().isMulticastReplicator(RR->identity.address()))) {
++#endif
+ 				RR->mc->send(tPtr, RR->node->now(), network, peer->address(), to, from, etherType, frameData, frameLen);
+ 			}
+ 
+@@ -1403,7 +1413,11 @@
+ 			}
+ 		}
+ 
++#ifdef ZT_LEAF_ONLY
++		if (false) {   // gather requests riding on a frame: see _doMULTICAST_GATHER
++#else
+ 		if (gatherLimit) {
++#endif
+ 			Packet outp(source(), RR->identity.address(), Packet::VERB_OK);
+ 			outp.append((unsigned char)Packet::VERB_MULTICAST_FRAME);
+ 			outp.append(packetId());
+--- a/node/Network.cpp
++++ b/node/Network.cpp
+@@ -1275,7 +1275,11 @@
+ 			tmp[1] = 0;
+ 			RR->node->stateObjectPut(tPtr, ZT_STATE_OBJECT_NETWORK_CONFIG, tmp, received->data(), received->sizeBytes());
+ 		}
++#ifdef ZT_LEAF_ONLY
++		else if (false) {	// only a local controller's configs come without their dictionary
++#else
+ 		else if (saveToDisk) {
++#endif
+ 			Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>* const d = new Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>();
+ 			try {
+ 				if (nconf.toDictionary(*d, false)) {
+--- a/node/Node.cpp
++++ b/node/Node.cpp
+@@ -789,6 +789,9 @@
+ 
+ void Node::ncSendConfig(uint64_t nwid, uint64_t requestPacketId, const Address& destination, const NetworkConfig& nc, bool sendLegacyFormatConfig)
+ {
++#ifdef ZT_LEAF_ONLY
++	return;	  // these three are a controller's; there is none in this build
++#endif
+ 	_localControllerAuthorizations_m.lock();
+ 	_localControllerAuthorizations[_LocalControllerAuth(nwid, destination)] = now();
+ 	_localControllerAuthorizations_m.unlock();
+@@ -850,6 +853,9 @@
+ 
+ void Node::ncSendRevocation(const Address& destination, const Revocation& rev)
+ {
++#ifdef ZT_LEAF_ONLY
++	return;
++#endif
+ 	if (destination == RR->identity.address()) {
+ 		SharedPtr<Network> n(network(rev.networkId()));
+ 		if (! n) {
+@@ -871,6 +877,9 @@
+ 
+ void Node::ncSendError(uint64_t nwid, uint64_t requestPacketId, const Address& destination, NetworkController::ErrorCode errorCode, const void* errorData, unsigned int errorDataSize)
+ {
++#ifdef ZT_LEAF_ONLY
++	return;
++#endif
+ 	if (destination == RR->identity.address()) {
+ 		SharedPtr<Network> n(network(nwid));
+ 		if (! n) {
+--- a/node/Switch.cpp
++++ b/node/Switch.cpp
+@@ -78,6 +78,9 @@
+ 				const Address destination(fragment.destination());
+ 
+ 				if (destination != RR->identity.address()) {
++#ifdef ZT_LEAF_ONLY
++					return;	 // a network member relays for nobody
++#endif
+ 					// RELAY: fragment is for a different node, so maybe send it there if we should relay.
+ 					if ((! RR->topology->amUpstream()) && (! path->trustEstablished(now))) {
+ 						return;
+@@ -166,6 +169,9 @@
+ 				}
+ 
+ 				if (destination != RR->identity.address()) {
++#ifdef ZT_LEAF_ONLY
++					return;	 // a network member relays for nobody
++#endif
+ 					// RELAY: packet head is for a different node, so maybe send it there if we should relay.
+ 
+ 					if ((! RR->topology->amUpstream()) && (! path->trustEstablished(now)) && (source != RR->identity.address())) {
+@@ -645,7 +651,12 @@
+ 
+ void Switch::aqm_enqueue(void* tPtr, const SharedPtr<Network>& network, Packet& packet, const bool encrypt, const int qosBucket, const uint64_t nwid, const int32_t flowId)
+ {
++#ifdef ZT_LEAF_ONLY
++	// No queue management: packets go straight out.
++	if (true) {
++#else
+ 	if (! network->qosEnabled()) {
++#endif
+ 		send(tPtr, packet, encrypt, nwid, flowId);
+ 		return;
+ 	}
+@@ -810,6 +821,9 @@
+ 
+ void Switch::aqm_dequeue(void* tPtr)
+ {
++#ifdef ZT_LEAF_ONLY
++	return;	  // nothing is ever queued (see aqm_enqueue)
++#endif
+ 	// Cycle through network-specific QoS control blocks
+ 	for (std::map<uint64_t, NetworkQoSControlBlock*>::iterator nqcb(_netQueueControlBlock.begin()); nqcb != _netQueueControlBlock.end();) {
+ 		if (! (*nqcb).second->_currEnqueuedPackets) {

@@ -13,7 +13,7 @@ OUT ?= ../../target/zt-$(PLATFORM)
 # The Switch's limits. Hosts build with the same ones, so tests see the same
 # sizes and the same truncation. A network that needs more than these gets the
 # "config too large" flag (patches/zerotier-0006).
-LIMITS := -DZT_RX_QUEUE_SIZE=8 -DZT_MAX_NETWORK_RULES=64 -DZT_MAX_NETWORK_SPECIALISTS=16 \
+LIMITS := -DZT_RX_QUEUE_SIZE=4 -DZT_MAX_NETWORK_RULES=64 -DZT_MAX_NETWORK_SPECIALISTS=16 \
           -DZT_MAX_NETWORK_ROUTES=16 -DZT_MAX_NETWORK_CAPABILITIES=2 -DZT_MAX_NETWORK_TAGS=8 \
           -DZT_MAX_MULTICAST_SUBSCRIPTIONS=64 -DZT_EXPECTING_REPLIES_BUCKET_MASK1=31 \
           -DZT_COMPACT_OUTBOUND_MULTICAST -DZT_MULTICAST_TX_QUEUE_SIZE=4 \
@@ -21,7 +21,7 @@ LIMITS := -DZT_RX_QUEUE_SIZE=8 -DZT_MAX_NETWORK_RULES=64 -DZT_MAX_NETWORK_SPECIA
           -DZT_MAX_PEER_NETWORK_PATHS=8 -DZT_RX_FRAGMENT_MAX=1500 \
           -DZT_SECURE_RANDOM_BUFFER_SIZE=1024 -DZT_NETWORKCONFIG_RESET_IN_PLACE -DZT_ED25519_NO_BASE_TABLE \
           -DZT_NO_SEND_COMPRESSION -DZT_MULTICAST_SEND_STACK_INDEXES=128 \
-          -DZT_NO_LOCAL_IDENTITY_VALIDATION -DZT_NO_THREADS
+          -DZT_NO_LOCAL_IDENTITY_VALIDATION -DZT_NO_THREADS -DZT_LEAF_ONLY
 
 # Not built: x86 AES, metrics, bonding, the threaded multiplexer and remote
 # tracing. Metrics, bonding and the multiplexer are replaced by the headers in

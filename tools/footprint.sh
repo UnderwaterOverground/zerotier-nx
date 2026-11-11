@@ -8,11 +8,11 @@
 # Exit 3: heap_size.h was rewritten; rebuild. Other: an error.
 set -eu
 cd "$(dirname "$0")/.."
-# 3588 KB. Lower it by what a change saves, never by squeezing the heap: the
+# 3516 KB. Lower it by what a change saves, never by squeezing the heap: the
 # heap's own floor is ZeroTier (about 0.6 MB while joining, 0.3 MB more for a
 # moment when a network configuration arrives) + overlay_budget_kb (up to
 # 384) + slack.
-target=$((0x381000))
+target=$((0x36F000))
 min_heap=$((1152 * 1024))
 elf=switch/sysmodule/zerotier-nx.elf
 header=switch/sysmodule/source/heap_size.h

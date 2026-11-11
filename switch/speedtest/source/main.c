@@ -1,9 +1,9 @@
 // zerotier-nx speedtest: TCP and UDP throughput to tools/speedtest-server.py
 // and the cost of single socket calls, once per server address (its LAN
-// address, then its tunnel address), plus SD card write speed and the
-// engine's crypto benchmark. Output goes to nxlink.
+// address, then its ZeroTier address), plus SD card write speed. Output goes
+// to nxlink.
 //
-//   nxlink -s speedtest.nro [+bsctu] <server ip> [<server ip> ...]
+//   nxlink -s speedtest.nro [+sctu] <server ip> [<server ip> ...]
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -183,21 +183,6 @@ static double udp_up(const char *ip, int mbit) {
     return loss;
 }
 
-static void bench(void) {
-    static const size_t sizes[] = {1280, 1400};
-    for (int i = 0; i < 2; i++) {
-        const u32 packets = 20000;
-        double t = now_s();
-        ztnx_bench_aead(sizes[i], packets);
-        t = now_s() - t;
-        printf("  chacha20poly1305, %zu-byte packets: %.1f Mbit/s\n", sizes[i],
-               sizes[i] * packets * 8.0 / t / 1e6);
-    }
-    double t = now_s();
-    ztnx_bench_x25519(200);
-    printf("  x25519: %.0f ops/s\n", 200 / (now_s() - t));
-}
-
 // Microseconds per call of each socket operation the data path uses, on a
 // UDP socket to `ip` (a tunnel address goes through the sysmodule's engine;
 // any other only through the MITM's passthrough).
@@ -288,16 +273,12 @@ int main(int argc, char **argv) {
     }
     nxlinkStdio();
     appletSetMediaPlaybackState(true);  // no auto-sleep mid-test
-    // Tests: +b crypto, +s SD card, +c call costs, +t TCP, +u UDP (default all;
-    // not -b: nxlink would take that as its own option).
-    const char *tests = "bsctu";
+    // Tests: +s SD card, +c call costs, +t TCP, +u UDP (default all; "+", not
+    // "-": nxlink would take that as an option of its own).
+    const char *tests = "sctu";
     for (int i = 1; i < argc; i++)
         if (argv[i][0] == '+') tests = argv[i] + 1;
     printf("zerotier-nx speedtest, %d s per test\n", SECS);
-    if (strchr(tests, 'b')) {
-        printf("\ncrypto (this core):\n");
-        bench();
-    }
     if (strchr(tests, 's')) {
         printf("\nSD card:\n");
         sd();

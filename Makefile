@@ -129,8 +129,8 @@ nxlink-mitm-test: mitm-test target/nxlink
 	@test -n "$(NXLINK_HOST)" -a -n "$(MITM_PEER)" || (echo "set NXLINK_HOST=<switch ip> MITM_PEER=<the peer's ZeroTier ip>" && false)
 	script -q target/nxlink-mitm.log target/nxlink -a $(NXLINK_HOST) -s switch/mitm-test/mitm-test.nro $(MITM_PEER) $(MITM_PASSTHROUGH)
 
-# Throughput (TCP/UDP each way), per-call socket costs, SD card writes and the
-# crypto benchmark, as plain homebrew through the MITM. Run
+# Throughput (TCP/UDP each way), per-call socket costs and SD card writes,
+# as plain homebrew through the MITM. Run
 # tools/speedtest-server.py on a wired machine and give it both of that
 # machine's addresses (LAN, then ZeroTier): SPEEDTEST_SERVERS="<lan ip> <zerotier ip>".
 speedtest: rust-switch

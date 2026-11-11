@@ -137,6 +137,16 @@ void ztnx_l2_frame_in(ZtnxStack *s, uint64_t src_mac, uint64_t dst_mac, uint32_t
 // is kept for the next call). The source MAC is ours.
 size_t ztnx_l2_next_out(ZtnxStack *s, uint8_t *buf, size_t cap, uint64_t *dst_mac, uint32_t *ethertype);
 
+// A device on the network whose MAC is known (from ARP).
+typedef struct {
+    uint64_t mac;
+    uint8_t ip[4];
+    uint8_t reserved[4];
+} ZtnxNeighbor;
+// Those devices: up to max into out. Returns how many were written (the
+// stack keeps at most 32).
+size_t ztnx_l2_neighbors(ZtnxStack *s, ZtnxNeighbor *out, size_t max);
+
 // ---- Overlay sockets (network side) ------------------------------------------
 // Non-blocking. Ids are > 0; errors are negative ZTNX_E* codes. Call between
 // begin and end (ztnx_net_udp_recvfrom, readiness and the address getters

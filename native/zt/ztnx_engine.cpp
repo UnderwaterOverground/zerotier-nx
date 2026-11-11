@@ -3,7 +3,9 @@
 
 #include <ZeroTierOne.h>
 
+#include "Address.hpp"
 #include "Identity.hpp"
+#include "MAC.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -535,6 +537,11 @@ void ignoreEvent(ZT_Node*, void*, void*, enum ZT_Event, const void*)
 }
 
 }	// namespace
+
+extern "C" uint64_t ztnx_engine_peer_mac(uint64_t address, uint64_t nwid)
+{
+	return ZeroTier::MAC(ZeroTier::Address(address), nwid).toInt();
+}
 
 extern "C" uint32_t ztnx_engine_selftest(void)
 {

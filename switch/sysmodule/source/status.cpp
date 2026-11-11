@@ -208,7 +208,30 @@ namespace ams::status {
         else if (event == ZTNX_EVENT_OFFLINE) g_status.flags |= ZTNX_CTL_FLAG_NO_ROOTS;
     }
 
-    void SetPeers(const ZtnxPeerInfo *peers, size_t n, size_t total) {
+    namespace {
+
+        // The name config.ini gives an address ("ip name\n" lines), into
+        // out; empty if none.
+        void NameOf(const char *names, const u8 ip[4], char *out, size_t cap) {
+            out[0] = 0;
+            char want[16];
+            const int want_len = util::SNPrintf(want, sizeof want, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+            for (const char *line = names; line && *line;) {
+                const char *end = std::strchr(line, '\n');
+                const size_t len = end ? static_cast<size_t>(end - line) : std::strlen(line);
+                if (len > static_cast<size_t>(want_len) + 1 && std::memcmp(line, want, want_len) == 0 && line[want_len] == ' ') {
+                    const size_t name_len = std::min(len - want_len - 1, cap - 1);
+                    std::memcpy(out, line + want_len + 1, name_len);
+                    out[name_len] = 0;
+                    return;
+                }
+                line = end ? end + 1 : nullptr;
+            }
+        }
+
+    }
+
+    void SetPeers(const ZtnxPeerInfo *peers, size_t n, size_t total, const ZtnxNeighbor *neighbors, size_t n_neighbors, const char *names) {
         std::scoped_lock lk(g_mutex);
         g_peer_total = total;
         g_peer_count = std::min(n, static_cast<size_t>(ZTNX_CTL_MAX_PEERS));
@@ -228,6 +251,15 @@ namespace ams::status {
             if (p.role == ZTNX_PEER_LEAF) {
                 leaves++;
                 if (p.direct) direct++;
+            }
+            // Its address on the network, if it has talked to us (ARP), and
+            // the name config.ini gives that address.
+            const u64 mac = g_status.nwid ? ztnx_engine_peer_mac(p.address, g_status.nwid) : 0;
+            for (size_t k = 0; mac && k < n_neighbors; k++) {
+                if (neighbors[k].mac != mac) continue;
+                std::memcpy(o.ipv4, neighbors[k].ip, 4);
+                NameOf(names, o.ipv4, o.name, sizeof o.name);
+                break;
             }
         }
         g_status.peers = leaves;

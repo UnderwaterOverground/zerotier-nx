@@ -74,6 +74,17 @@ const _: () = assert!(core::mem::size_of::<ZtnxV4Net>() == 8);
 const _: () = assert!(core::mem::size_of::<ZtnxV4Route>() == 12);
 const _: () = assert!(core::mem::size_of::<ZtnxStackStats>() == 24);
 
+/// A device on the network whose MAC is known.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct ZtnxNeighbor {
+    pub mac: u64,
+    pub ip: [u8; 4],
+    pub reserved: [u8; 4],
+}
+
+const _: () = assert!(core::mem::size_of::<ZtnxNeighbor>() == 16);
+
 pub struct ZtnxStack {
     stack: Stack,
     /// A frame taken from the stack that didn't fit the caller's buffer;
@@ -192,6 +203,18 @@ pub unsafe extern "C" fn ztnx_l2_configure(
 pub unsafe extern "C" fn ztnx_l2_down(s: *mut ZtnxStack) {
     (*s).held = None;
     (*s).stack.down();
+}
+
+/// The devices whose MAC is known: up to `max` into `out`. Returns how many
+/// were written (the stack keeps at most 32).
+#[no_mangle]
+pub unsafe extern "C" fn ztnx_l2_neighbors(s: *mut ZtnxStack, out: *mut ZtnxNeighbor, max: usize) -> usize {
+    let mut n = 0;
+    for (mac, ip) in (*s).stack.l2().neighbors().take(max) {
+        *out.add(n) = ZtnxNeighbor { mac, ip: ip.octets(), reserved: [0; 4] };
+        n += 1;
+    }
+    n
 }
 
 /// A frame arrived from the network. Call between begin and end.

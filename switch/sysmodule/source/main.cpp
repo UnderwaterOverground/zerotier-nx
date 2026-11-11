@@ -1388,7 +1388,9 @@ namespace ams {
                 last_peers = now;
                 static ZtnxPeerInfo peers[ZTNX_CTL_MAX_PEERS];  // static, not stack
                 const size_t total = link->Peers(peers, ZTNX_CTL_MAX_PEERS);
-                status::SetPeers(peers, std::min<size_t>(total, ZTNX_CTL_MAX_PEERS), total);
+                static ZtnxNeighbor neighbors[32];
+                const size_t n_neighbors = rt->Read([&](ZtnxStack *st) { return ztnx_l2_neighbors(st, neighbors, util::size(neighbors)); });
+                status::SetPeers(peers, std::min<size_t>(total, ZTNX_CTL_MAX_PEERS), total, neighbors, n_neighbors, g_host_lines);
             }
             // Whole-heap use (ZeroTier, Rust, C++, C), sampled every tick;
             // the Rust peak below is exact.

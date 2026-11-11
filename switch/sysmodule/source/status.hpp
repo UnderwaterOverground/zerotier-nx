@@ -48,7 +48,10 @@ namespace ams::status {
     void OnEngineEvent(u32 event);
     // The peers ZeroTier knows (engine thread): n of them in peers, of
     // `total` there are.
-    void SetPeers(const ZtnxPeerInfo *peers, size_t n, size_t total);
+    // neighbors: the devices the stack has a MAC for, which is how a peer's
+    // address on the network is known; names: config.ini's host= entries as
+    // "ip name\n" lines.
+    void SetPeers(const ZtnxPeerInfo *peers, size_t n, size_t total, const ZtnxNeighbor *neighbors, size_t n_neighbors, const char *names);
     ZtnxCtlStatus Get();
     size_t GetLastError(char *out, size_t cap);
     size_t GetNetworkName(char *out, size_t cap);

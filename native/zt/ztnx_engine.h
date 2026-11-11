@@ -160,6 +160,9 @@ typedef struct ZtnxPeerInfo {
     uint8_t version[3];   // 0.0.0 if unknown
     uint8_t reserved[5];
 } ZtnxPeerInfo;
+// The MAC address a node has on a network (ZeroTier derives it from the two
+// IDs). A pure function: any thread.
+uint64_t ztnx_engine_peer_mac(uint64_t address, uint64_t nwid);
 // Every peer ZeroTier knows, up to max of them. Returns how many there are
 // (can exceed max). Allocates about 2 KB per peer while it runs: call it
 // rarely.

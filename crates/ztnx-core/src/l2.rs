@@ -263,6 +263,12 @@ impl L2 {
         !self.ctl.is_empty() || !self.ready.is_empty()
     }
 
+    /// The neighbours whose MAC is known: (MAC, address), in no particular
+    /// order.
+    pub fn neighbors(&self) -> impl Iterator<Item = (u64, Ipv4Addr)> + '_ {
+        self.cache.iter().map(|e| (e.mac, e.ip))
+    }
+
     /// The neighbour's address behind a MAC, if known (for naming peers).
     pub fn ip_of(&self, mac: u64) -> Option<Ipv4Addr> {
         self.cache.iter().find(|e| e.mac == mac).map(|e| e.ip)
@@ -669,6 +675,18 @@ mod tests {
         assert_eq!(out[1].dst_mac, PEER_MAC);
         assert_eq!(l2.stats().broadcasts, 0);
         assert_eq!(l2.ip_of(PEER_MAC), Some(PEER_IP));
+    }
+
+    #[test]
+    fn lists_neighbours() {
+        let mut l2 = up();
+        let other_mac = PEER_MAC + 1;
+        let other_ip = Ipv4Addr::from(u32::from(PEER_IP) + 1);
+        l2.frame_in(PEER_MAC, BROADCAST, ETHERTYPE_ARP, &arp(1, PEER_MAC, PEER_IP, 0, OUR_IP), at(0));
+        l2.frame_in(other_mac, BROADCAST, ETHERTYPE_ARP, &arp(1, other_mac, other_ip, 0, OUR_IP), at(5));
+        let seen: Vec<(u64, Ipv4Addr)> = l2.neighbors().collect();
+        assert_eq!(seen.len(), 2);
+        assert!(seen.contains(&(PEER_MAC, PEER_IP)) && seen.contains(&(other_mac, other_ip)));
     }
 
     #[test]

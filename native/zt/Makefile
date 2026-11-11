@@ -18,13 +18,15 @@ LIMITS := -DZT_RX_QUEUE_SIZE=8 -DZT_MAX_NETWORK_RULES=64 -DZT_MAX_NETWORK_SPECIA
           -DZT_MAX_ZT_ASSIGNED_ADDRESSES=8 -DZT_NETWORK_MAX_INCOMING_UPDATES=1 \
           -DZT_MAX_PEER_NETWORK_PATHS=8 -DZT_RX_FRAGMENT_MAX=1500 \
           -DZT_SECURE_RANDOM_BUFFER_SIZE=1024 -DZT_NETWORKCONFIG_RESET_IN_PLACE -DZT_ED25519_NO_BASE_TABLE \
+          -DZT_NO_SEND_COMPRESSION -DZT_MULTICAST_SEND_STACK_INDEXES=128 \
           -DZT_NO_LOCAL_IDENTITY_VALIDATION -DZT_NO_THREADS
 
-# Not built: x86 AES, metrics, bonding and the threaded multiplexer. The last
-# three are replaced by the headers in stubs/, force-included so that the
-# real headers' include guards are already taken.
-NODE_SRCS := $(filter-out $(addprefix $(ZT)/node/,AES_aesni.cpp Metrics.cpp Bond.cpp PacketMultiplexer.cpp),$(wildcard $(ZT)/node/*.cpp))
-GLUE_SRCS := $(wildcard *.cpp) stubs/PacketMultiplexer.cpp
+# Not built: x86 AES, metrics, bonding, the threaded multiplexer and remote
+# tracing. Metrics, bonding and the multiplexer are replaced by the headers in
+# stubs/, force-included so that the real headers' include guards are already
+# taken; tracing by stubs/Trace.cpp, whose events do nothing.
+NODE_SRCS := $(filter-out $(addprefix $(ZT)/node/,AES_aesni.cpp Metrics.cpp Bond.cpp PacketMultiplexer.cpp Trace.cpp),$(wildcard $(ZT)/node/*.cpp))
+GLUE_SRCS := $(wildcard *.cpp) stubs/PacketMultiplexer.cpp stubs/Trace.cpp
 
 COMMON := -MMD -MP -g -ffunction-sections -fdata-sections -fno-strict-aliasing -fwrapv -fexceptions \
           -std=gnu++17 -Wall -Wno-deprecated -Wno-unused-variable \

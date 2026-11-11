@@ -1,0 +1,41 @@
+--- a/node/Multicaster.cpp
++++ b/node/Multicaster.cpp
+@@ -140,9 +140,14 @@
+ 	return ls;
+ }
+ 
++// Groups with more members than this get their index array from the heap.
++#ifndef ZT_MULTICAST_SEND_STACK_INDEXES
++#define ZT_MULTICAST_SEND_STACK_INDEXES 4096
++#endif
++
+ void Multicaster::send(void* tPtr, int64_t now, const SharedPtr<Network>& network, const Address& origin, const MulticastGroup& mg, const MAC& src, unsigned int etherType, const void* data, unsigned int len)
+ {
+-	unsigned long idxbuf[4096];
++	unsigned long idxbuf[ZT_MULTICAST_SEND_STACK_INDEXES];
+ 	unsigned long* indexes = idxbuf;
+ 
+ 	// If we're in hub-and-spoke designated multicast replication mode, see if we
+--- a/node/Packet.cpp
++++ b/node/Packet.cpp
+@@ -1276,6 +1276,12 @@
+ bool Packet::compress()
+ {
+ 	char* const data = reinterpret_cast<char*>(unsafeData());
++#ifdef ZT_NO_SEND_COMPRESSION
++	// Compression is optional for the sender (the flag says whether a packet
++	// is compressed). Not attempting it saves this function's 36 KB of stack.
++	data[ZT_PACKET_IDX_VERB] &= (char)(~ZT_PROTO_VERB_FLAG_COMPRESSED);
++	return false;
++#else
+ 	char buf[ZT_PROTO_MAX_PACKET_LENGTH * 2];
+ 
+ 	if ((! compressed()) && (size() > (ZT_PACKET_IDX_PAYLOAD + 64))) {	 // don't bother compressing tiny packets
+@@ -1291,6 +1297,7 @@
+ 	data[ZT_PACKET_IDX_VERB] &= (char)(~ZT_PROTO_VERB_FLAG_COMPRESSED);
+ 
+ 	return false;
++#endif
+ }
+ 
+ bool Packet::uncompress()

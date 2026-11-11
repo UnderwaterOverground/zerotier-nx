@@ -11,17 +11,25 @@ namespace ZeroTier {
 
 class OSUtils {
   public:
+	// Hex by hand: the only formatted printing the core would otherwise do
+	// on the Switch, where it brings in the C library's whole printf.
+	static inline std::string hexStr(uint64_t v, int digits)
+	{
+		char buf[17];
+		for (int i = digits - 1; i >= 0; --i) {
+			buf[i] = "0123456789abcdef"[v & 0xf];
+			v >>= 4;
+		}
+		buf[digits] = 0;
+		return std::string(buf);
+	}
 	static inline std::string networkIDStr(uint64_t nwid)
 	{
-		char buf[24];
-		snprintf(buf, sizeof(buf), "%.16llx", (unsigned long long)nwid);
-		return std::string(buf);
+		return hexStr(nwid, 16);
 	}
 	static inline std::string nodeIDStr(uint64_t addr)
 	{
-		char buf[16];
-		snprintf(buf, sizeof(buf), "%.10llx", (unsigned long long)addr);
-		return std::string(buf);
+		return hexStr(addr, 10);
 	}
 	static inline int ztsnprintf(char* buf, unsigned int len, const char* fmt, ...)
 	{

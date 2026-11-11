@@ -2,8 +2,8 @@
 //!
 //! Scope is deliberately narrow: TLS 1.3 only, TLS_CHACHA20_POLY1305_SHA256,
 //! X25519 key exchange, and the ECDSA/RSA signature algorithms needed to verify
-//! Web PKI chains (Let's Encrypt and friends). That covers Tailscale's DERP
-//! servers and keeps the Switch binary small and free of C/asm dependencies.
+//! Web PKI chains (Let's Encrypt and friends). That covers the update check's
+//! server and keeps the Switch binary small and free of C/asm dependencies.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -324,8 +324,8 @@ impl SignatureVerificationAlgorithm for EcdsaVerify {
     }
 }
 
-// RSA is required: Tailscale's servers present an RSA or an ECDSA
-// certificate depending on which frontend answers.
+// RSA is required: servers present an RSA or an ECDSA certificate depending
+// on which frontend answers.
 #[derive(Debug)]
 struct RsaVerify {
     pss: bool,

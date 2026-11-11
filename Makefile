@@ -120,24 +120,24 @@ overlay:
 	$(SW) make -C switch/overlay
 
 # Socket-virtualization suite as plain homebrew, through the sysmodule's
-# bsd:u MITM. Needs tools/echo-server.py running on the tailnet peer
-# (MITM_PEER, e.g. this Mac's `tailscale ip -4`).
+# bsd:u MITM. Needs TCP and UDP echo on port 7 of a device on the ZeroTier
+# network (MITM_PEER; tools/echo-server.py, or the e2e peer container).
 mitm-test:
 	$(SW) make -C switch/mitm-test
 
 nxlink-mitm-test: mitm-test target/nxlink
-	@test -n "$(NXLINK_HOST)" -a -n "$(MITM_PEER)" || (echo "set NXLINK_HOST=<switch ip> MITM_PEER=<tailnet peer ip>" && false)
+	@test -n "$(NXLINK_HOST)" -a -n "$(MITM_PEER)" || (echo "set NXLINK_HOST=<switch ip> MITM_PEER=<the peer's ZeroTier ip>" && false)
 	script -q target/nxlink-mitm.log target/nxlink -a $(NXLINK_HOST) -s switch/mitm-test/mitm-test.nro $(MITM_PEER) $(MITM_PASSTHROUGH)
 
 # Throughput (TCP/UDP each way), per-call socket costs, SD card writes and the
 # crypto benchmark, as plain homebrew through the MITM. Run
 # tools/speedtest-server.py on a wired machine and give it both of that
-# machine's addresses (LAN, then tailnet): SPEEDTEST_SERVERS="<lan ip> <tailnet ip>".
+# machine's addresses (LAN, then ZeroTier): SPEEDTEST_SERVERS="<lan ip> <zerotier ip>".
 speedtest: rust-switch
 	$(SW) make -C switch/speedtest
 
 nxlink-speedtest: speedtest target/nxlink
-	@test -n "$(NXLINK_HOST)" -a -n "$(SPEEDTEST_SERVERS)" || (echo "set NXLINK_HOST=<switch ip> SPEEDTEST_SERVERS=\"<lan ip> <tailnet ip>\"" && false)
+	@test -n "$(NXLINK_HOST)" -a -n "$(SPEEDTEST_SERVERS)" || (echo "set NXLINK_HOST=<switch ip> SPEEDTEST_SERVERS=\"<lan ip> <zerotier ip>\"" && false)
 	script -q target/nxlink-speedtest.log target/nxlink -a $(NXLINK_HOST) -s switch/speedtest/speedtest.nro $(SPEEDTEST_ARGS) $(SPEEDTEST_SERVERS)
 
 nxlink: nro target/nxlink

@@ -190,7 +190,7 @@ namespace ams::bsd_mitm {
         // translates both for its callers); everything else matches libnx's
         // FreeBSD-derived headers.
         constexpr int WireEIO = 5;
-        constexpr int WireENetUnreach = 101;  // tunnel traffic while the user paused Tailscale
+        constexpr int WireENetUnreach = 101;  // the network's traffic while the user has paused it
         constexpr int WireNonBlock = 0x800;
         constexpr int WireENoBufs = 105;
 

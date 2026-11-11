@@ -1,7 +1,7 @@
-//! Userspace TCP/IP stack for the tailnet side, built on smoltcp.
+//! Userspace TCP/IP stack for the network's side, built on smoltcp.
 //!
-//! IP packets decrypted from WireGuard are injected here; packets the stack
-//! emits are drained and sent through the tunnel. On top sits a small
+//! IP packets that arrived over the network are injected here; packets the
+//! stack emits are drained and sent through it (see `l2` and `stack`). On top sits a small
 //! BSD-like socket API (ids, non-blocking calls, readiness) that the socket
 //! MITM layer maps intercepted `bsd:u` calls onto.
 
@@ -17,7 +17,7 @@ use smoltcp::wire::{HardwareAddress, IpAddress, IpCidr, IpEndpoint};
 
 use crate::time::Instant;
 
-/// WireGuard's default interface MTU; the engine sets the configured one.
+/// The MTU until the stack is configured (see `stack::TCP_MTU`).
 pub const DEFAULT_MTU: usize = 1420;
 
 // Overlay socket memory. On the Switch every byte comes out of the
@@ -260,7 +260,7 @@ impl Netstack {
             socks: BTreeMap::new(),
             closing: Vec::new(),
             next_id: 1,
-            // Random start: after a restart with the same tailnet IP, reusing
+            // Random start: after a restart with the same address, reusing
             // the previous run's 4-tuples would collide with connections the
             // peer still considers established.
             next_port: random_ephemeral_port(),
@@ -903,8 +903,8 @@ mod udp {
 /// IPv4 fragment reassembly.
 ///
 /// The UDP fast path ([`udp::parse`]) and smoltcp both need a whole datagram.
-/// A sender whose path to us crosses a smaller MTU than the tunnel's (Sunshine
-/// sends video packets larger than the WireGuard MTU, for one) fragments the
+/// A sender whose path to us crosses a smaller MTU than its own (Sunshine
+/// sends video packets larger than fit, for one) fragments the
 /// inner IP packet; without reassembly every fragment is dropped and, e.g.,
 /// Moonlight never receives video. We rebuild the original packet here before
 /// delivery. Bounded in entries, bytes and age so a lost tail or a flood can't
@@ -1241,8 +1241,7 @@ mod tests {
         assert_eq!(got, total, "transfer stalled after burst loss (sent {sent})");
     }
 
-    /// The stack answers pings to its own addresses (peers' `tailscale ping
-    /// --icmp` and plain ping rely on it).
+    /// The stack answers pings to its own addresses.
     #[test]
     fn answers_icmp_echo() {
         let mut net = Netstack::new(Instant::from_millis(0), DEFAULT_MTU);

@@ -1,19 +1,23 @@
-// zerotier-nx sysmodule: runs the WireGuard engine from boot (boot2), so the
-// console is on its tunnel without any app open.
+// zerotier-nx sysmodule: runs ZeroTier's core from boot (boot2), so the
+// console is on its ZeroTier network without any app open.
 //
 // It also MITMs bsd:u for homebrew (bsd_mitm.cpp), so their sockets reach
-// tunnel addresses through the engine (mitm=off in config.ini disables that).
+// the network's addresses (mitm=off in config.ini disables that).
 //
 // Files (SD card):
-//   config/zerotier-nx/<name>.conf  wg-quick style tunnel configuration(s)
-//   config/zerotier-nx/config.ini   conf=<name>.conf (default: the only one,
-//                                    else wg0.conf), log_udp=<ip>:<port>,
+//   config/zerotier-nx/config.ini   network=<16 hex digits>, port=<udp port>,
+//                                    host = <name> <address> (any number),
+//                                    log_udp=<ip>:<port>,
 //                                    mitm=homebrew|homebrew,sys-ftpd|off,
 //                                    mitm_titles=<program IDs>, hosts=on|off,
-//                                    aliases=on|off (stand-in peer addresses),
+//                                    aliases=on|off (stand-in addresses),
 //                                    overlay_budget_kb=<128..384>,
 //                                    connect_notice=on|off, update_check=on|off,
 //                                    tunnel_lan=on (tests: LAN through the tunnel)
+//   config/zerotier-nx/identity.secret, identity.public  this Switch's
+//                                    ZeroTier identity (made on first boot when
+//                                    memory allows, or with zerotier-idtool)
+//   config/zerotier-nx/planet, networks.d/  what ZeroTier itself stores
 //   config/zerotier-nx/disabled     kill switch: if present, exit at boot
 //   config/zerotier-nx/no-update-check  the overlay's update check switch (off)
 //   config/zerotier-nx/crashed      written after 3 boots in a row that ended

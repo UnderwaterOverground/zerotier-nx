@@ -66,8 +66,8 @@ pub const ROOTS_EC: &[TrustAnchor<'static>] = &[
   },
 ];
 
-/// RSA roots. Needed everywhere: Tailscale's frontends serve RSA or
-/// ECDSA certificates depending on which one answers.
+/// RSA roots. Needed everywhere: a server's frontends serve RSA or ECDSA
+/// certificates depending on which one answers.
 pub const ROOTS_RSA: &[TrustAnchor<'static>] = &[
   // Amazon Root CA 2
   TrustAnchor {

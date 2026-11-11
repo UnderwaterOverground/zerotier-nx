@@ -1,4 +1,4 @@
-# Tailscale overlay for zerotier-nx (Tesla/Ultrahand). Built from the
+# The zerotier-nx overlay (Tesla/Ultrahand). Built from the
 # Tesla-Template Makefile; libtesla and qrcodegen are vendored in third_party.
 
 #---------------------------------------------------------------------------------

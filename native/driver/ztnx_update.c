@@ -16,6 +16,15 @@
 #include "ztnx.h"
 #include "ztnx_dns.h"
 
+// TLS: on the Switch the console's own ssl service does it (its code and
+// its handshake memory are the system's, not ours); elsewhere the Rust
+// client in ztnx-core.
+#ifdef __SWITCH__
+#include <switch.h>
+
+#include "ztnx_update_roots.h"
+#endif
+
 #ifdef ZTNX_NO_STDIO
 // Builds without newlib's printf (the sysmodule) supply this instead.
 int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...);
@@ -26,15 +35,26 @@ int ztnx_snprintf(char *dst, size_t size, const char *fmt, ...);
 
 struct ZtnxUpdate {
     int fd;
+#ifdef __SWITCH__
+    SslContext ctx;
+    SslConnection conn;
+    int ssl_up, ctx_up, conn_up;  // what ztnx_update_free has to undo
+    int stage;                    // SSL_*
+    char req[256];
+    size_t req_len, req_off;
+#else
     ZtnxTls *tls;
+#endif
     int connecting;
     int result;
     uint64_t deadline_ns;
     char current[24];
     char latest[24];
     char error[96];
+#ifndef __SWITCH__
     uint8_t out[1024];  // ciphertext taken from TLS, not yet sent
     size_t out_off, out_len;
+#endif
     char head[1024];    // the response's start; the Location header is early
     size_t head_len;
 };
@@ -84,22 +104,35 @@ ZtnxUpdate *ztnx_update_start(const char *repo, const char *current, uint64_t no
     }
     u->connecting = 1;
 
+    // Sent once the handshake is done.
+#ifdef __SWITCH__
+    char *req = u->req;
+    const size_t req_cap = sizeof u->req;
+#else
+    char req_buf[256];
+    char *req = req_buf;
+    const size_t req_cap = sizeof req_buf;
     u->tls = ztnx_tls_new(HOST);
     if (!u->tls) {
         fail(u, "TLS setup failed", NULL);
         return u;
     }
-    // Sent once the handshake is done.
-    char req[256];
-    const int n = snprintf(req, sizeof req,
+#endif
+    const int n = snprintf(req, req_cap,
                            "GET /%s/releases/latest HTTP/1.1\r\n"
                            "Host: " HOST "\r\n"
                            "User-Agent: zerotier-nx/%s\r\n"
                            "Connection: close\r\n\r\n",
                            repo, current);
-    if (n <= 0 || (size_t)n >= sizeof req || ztnx_tls_write(u->tls, (const uint8_t *)req, (size_t)n) != 0) {
-        fail(u, "TLS write failed", NULL);
+    if (n <= 0 || (size_t)n >= req_cap) {
+        fail(u, "request too long", NULL);
+        return u;
     }
+#ifdef __SWITCH__
+    u->req_len = (size_t)n;
+#else
+    if (ztnx_tls_write(u->tls, (const uint8_t *)req, (size_t)n) != 0) fail(u, "TLS write failed", NULL);
+#endif
     return u;
 }
 
@@ -139,6 +172,74 @@ static int parse_head(ZtnxUpdate *u) {
     return u->result;
 }
 
+#ifdef __SWITCH__
+enum { SSL_SETUP, SSL_HANDSHAKE, SSL_SEND, SSL_RECV };
+
+// The ssl service's "try again" in non-blocking mode.
+static int would_block(Result rc) { return R_VALUE(rc) == MAKERESULT(123, 204); }
+
+static int fail_rc(ZtnxUpdate *u, const char *what, Result rc) {
+    char detail[24];
+    snprintf(detail, sizeof detail, "0x%x", (unsigned)R_VALUE(rc));
+    return fail(u, what, detail);
+}
+
+// Hands the connected socket to the ssl service and sets the connection up.
+static int ssl_setup(ZtnxUpdate *u) {
+    Result rc = sslInitialize(3);
+    if (R_FAILED(rc)) return fail_rc(u, "ssl service", rc);
+    u->ssl_up = 1;
+    if (R_FAILED(rc = sslCreateContext(&u->ctx, SslVersion_Auto))) return fail_rc(u, "ssl context", rc);
+    u->ctx_up = 1;
+    // github.com's roots, next to the console's own store (older firmware
+    // doesn't have them). A failed import just leaves that store.
+    sslContextImportServerPki(&u->ctx, kRootUserTrustEcc, sizeof kRootUserTrustEcc, SslCertificateFormat_Der, NULL);
+    sslContextImportServerPki(&u->ctx, kRootSectigoE46, sizeof kRootSectigoE46, SslCertificateFormat_Der, NULL);
+    if (R_FAILED(rc = sslContextCreateConnection(&u->ctx, &u->conn))) return fail_rc(u, "ssl connection", rc);
+    u->conn_up = 1;
+    // The socket stays ours to close.
+    if (R_FAILED(rc = sslConnectionSetOption(&u->conn, SslOptionType_DoNotCloseSocket, true))) return fail_rc(u, "ssl option", rc);
+    if (socketSslConnectionSetSocketDescriptor(&u->conn, u->fd) == -1 && errno != ENOENT) return fail_errno(u, "ssl socket", errno);
+    if (R_FAILED(rc = sslConnectionSetHostName(&u->conn, HOST, (u32)strlen(HOST)))) return fail_rc(u, "ssl host name", rc);
+    // The default checks stay (the certificate chain and the host name).
+    // Certificate dates are not among them, so a console with a wrong
+    // clock can still ask.
+    if (R_FAILED(rc = sslConnectionSetIoMode(&u->conn, SslIoMode_NonBlocking))) return fail_rc(u, "ssl mode", rc);
+    u->stage = SSL_HANDSHAKE;
+    return ZTNX_UPDATE_PENDING;
+}
+
+static int ssl_step(ZtnxUpdate *u) {
+    Result rc;
+    u32 n = 0;
+    if (u->stage == SSL_SETUP && ssl_setup(u) != ZTNX_UPDATE_PENDING) return u->result;
+    if (u->stage == SSL_HANDSHAKE) {
+        rc = sslConnectionDoHandshake(&u->conn, NULL, NULL, NULL, 0);
+        if (R_FAILED(rc)) return would_block(rc) ? ZTNX_UPDATE_PENDING : fail_rc(u, "TLS handshake", rc);
+        u->stage = SSL_SEND;
+    }
+    while (u->stage == SSL_SEND) {
+        rc = sslConnectionWrite(&u->conn, u->req + u->req_off, (u32)(u->req_len - u->req_off), &n);
+        if (R_FAILED(rc)) return would_block(rc) ? ZTNX_UPDATE_PENDING : fail_rc(u, "TLS write", rc);
+        u->req_off += n;
+        if (u->req_off >= u->req_len) u->stage = SSL_RECV;
+    }
+    for (;;) {
+        const size_t room = sizeof u->head - 1 - u->head_len;
+        if (strstr(u->head, "\r\n\r\n") || room == 0) return parse_head(u);
+        rc = sslConnectionRead(&u->conn, u->head + u->head_len, (u32)room, &n);
+        if (R_FAILED(rc) && would_block(rc)) return ZTNX_UPDATE_PENDING;
+        if (R_FAILED(rc) || n == 0) {
+            // Closed (or broken): what arrived may still hold the answer.
+            if (u->head_len) return parse_head(u);
+            return R_FAILED(rc) ? fail_rc(u, "TLS read", rc) : fail(u, "connection closed", NULL);
+        }
+        u->head_len += n;
+        u->head[u->head_len] = 0;
+    }
+}
+#endif
+
 int ztnx_update_step(ZtnxUpdate *u, uint64_t now_ns) {
     if (u->result != ZTNX_UPDATE_PENDING) return u->result;
     if (now_ns > u->deadline_ns) return fail(u, "timed out", NULL);
@@ -153,6 +254,9 @@ int ztnx_update_step(ZtnxUpdate *u, uint64_t now_ns) {
         u->connecting = 0;
     }
 
+#ifdef __SWITCH__
+    return ssl_step(u);
+#else
     for (int progressed = 1; progressed;) {
         progressed = 0;
         // Send what TLS has for the server.
@@ -187,6 +291,7 @@ int ztnx_update_step(ZtnxUpdate *u, uint64_t now_ns) {
         }
     }
     return ZTNX_UPDATE_PENDING;
+#endif
 }
 
 const char *ztnx_update_latest(const ZtnxUpdate *u) { return u->latest; }
@@ -195,8 +300,15 @@ const char *ztnx_update_error(const ZtnxUpdate *u) { return u->error; }
 
 void ztnx_update_free(ZtnxUpdate *u) {
     if (!u) return;
+#ifdef __SWITCH__
+    if (u->conn_up) sslConnectionClose(&u->conn);
+    if (u->ctx_up) sslContextClose(&u->ctx);
+    if (u->ssl_up) sslExit();
+    if (u->fd >= 0) close(u->fd);
+#else
     if (u->fd >= 0) close(u->fd);
     if (u->tls) ztnx_tls_free(u->tls);
+#endif
     free(u);
 }
 

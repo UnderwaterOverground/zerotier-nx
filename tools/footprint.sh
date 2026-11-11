@@ -8,12 +8,12 @@
 # Exit 3: heap_size.h was rewritten; rebuild. Other: an error.
 set -eu
 cd "$(dirname "$0")/.."
-# 3064 KB. Lower it by what a change saves, never by squeezing the heap below
+# 2760 KB. Lower it by what a change saves, never by squeezing the heap below
 # what was measured on a console: ZeroTier's core holds about 470 KB with one
 # network and reached 607 KB (everything included) while joining and under a
 # 50 Mbit/s speed test; overlay_budget_kb adds up to 384 KB for apps'
 # sockets, and each ARP request in flight parks 30 KB for half a minute.
-target=$((0x2FE000))
+target=$((0x2B2000))
 min_heap=$((1152 * 1024))
 elf=switch/sysmodule/zerotier-nx.elf
 header=switch/sysmodule/source/heap_size.h

@@ -72,9 +72,9 @@ check "curl fetches a page from the peer" sh -c "docker compose exec -T -e LD_PR
 # was interrupted) answers "busy" for good.
 peer sh -c 'for p in /proc/[0-9]*; do [ "$(cat "$p/comm" 2>/dev/null)" = iperf3 ] && kill -9 "${p#/proc/}"; done; iperf3 -s -D' >/dev/null 2>&1
 sleep 1
-TCP_MBIT=$(shim client iperf3 -c "$PEER_IP" -t 5 -J 2>/dev/null | jq -r '.end.sum_received.bits_per_second / 1e6 | floor' 2>/dev/null)
+TCP_MBIT=$(shim client timeout 60 iperf3 -c "$PEER_IP" -t 5 -J 2>/dev/null | jq -r '.end.sum_received.bits_per_second / 1e6 | floor' 2>/dev/null)
 check "iperf3 TCP to the peer, 5 s (${TCP_MBIT:-?} Mbit/s, at least 50)" test "${TCP_MBIT:-0}" -ge 50
-UDP_MBIT=$(shim client iperf3 -c "$PEER_IP" -u -b 20M -l 1000 -t 5 -J 2>/dev/null | jq -r '.end.sum.bits_per_second / 1e6 | floor' 2>/dev/null)
+UDP_MBIT=$(shim client timeout 60 iperf3 -c "$PEER_IP" -u -b 20M -l 1000 -t 5 -J 2>/dev/null | jq -r '.end.sum.bits_per_second / 1e6 | floor' 2>/dev/null)
 check "iperf3 UDP 20 Mbit/s to the peer (${UDP_MBIT:-?} Mbit/s sent)" test "${UDP_MBIT:-0}" -ge 19
 
 echo

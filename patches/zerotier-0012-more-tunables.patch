@@ -1,0 +1,25 @@
+--- a/include/ZeroTierOne.h
++++ b/include/ZeroTierOne.h
+@@ -204,7 +204,9 @@
+ /**
+  * Maximum number of multicast groups a device / network interface can be subscribed to at once
+  */
++#ifndef ZT_MAX_MULTICAST_SUBSCRIPTIONS
+ #define ZT_MAX_MULTICAST_SUBSCRIPTIONS 1024
++#endif
+ 
+ /**
+  * Bits for ZT_VirtualNetworkConfig::truncated: the controller sent more of
+--- a/node/Node.hpp
++++ b/node/Node.hpp
+@@ -27,7 +27,10 @@
+ #include <vector>
+ 
+ // Bit mask for "expecting reply" hash
++// (Mask, so one less than a power of two: 256 buckets of 32 packet IDs.)
++#ifndef ZT_EXPECTING_REPLIES_BUCKET_MASK1
+ #define ZT_EXPECTING_REPLIES_BUCKET_MASK1 255
++#endif
+ #define ZT_EXPECTING_REPLIES_BUCKET_MASK2 31
+ 
+ namespace ZeroTier {

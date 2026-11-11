@@ -30,6 +30,9 @@ applied is skipped). The patched files stay MPL 2.0.
 | `zerotier-0009-small-statics.patch` | Two static buffers: the random generator's 64 KB one gets a size (`ZT_SECURE_RANDOM_BUFFER_SIZE`), and with `ZT_NETWORKCONFIG_RESET_IN_PLACE` a network config is cleared in place instead of from a 45 KB empty copy. |
 | `zerotier-0010-ed25519-no-base-table.patch` | With `ZT_ED25519_NO_BASE_TABLE`, multiples of Ed25519's base point are computed by the routine verification uses instead of from a 109 KB table. Slower and not constant-time: acceptable only because a network member makes its own key pair and signs nothing. |
 | `zerotier-0011-stack-frames.patch` | Two large stack frames: with `ZT_NO_SEND_COMPRESSION` packets are sent uncompressed (compressing is the sender's choice; its buffers took 36 KB of stack), and `ZT_MULTICAST_SEND_STACK_INDEXES` sizes the index array `Multicaster::send` keeps on the stack (32 KB by default; larger groups use the heap either way). |
+| `zerotier-0012-more-tunables.patch` | `ZT_MAX_MULTICAST_SUBSCRIPTIONS` (1024 entries in every `ZT_VirtualNetworkConfig`, 16 KB) and the reply-tracking table's bucket count (`ZT_EXPECTING_REPLIES_BUCKET_MASK1`, 32 KB at stock size) can be set from the command line. |
+| `zerotier-0013-save-received-config.patch` | A network config is stored as the dictionary the controller sent instead of being serialised again from the parsed form, which took two more dictionary-sized buffers. |
+| `zerotier-0014-compact-outbound-multicast.patch` | With `ZT_COMPACT_OUTBOUND_MULTICAST` a pending multicast holds its frame once (in the packet) instead of three times: 10 KB instead of 30. `ZT_MULTICAST_TX_QUEUE_SIZE` bounds a group's queue separately from the switch's, and expired entries are dropped when the next one is queued. |
 
 Headers in `native/zt/stubs/` replace upstream ones at build time by taking
 their include guards: no-op metrics and bonding, a multiplexer without threads,
@@ -37,5 +40,6 @@ and on the Switch a mutex on libnx and the two `OSUtils` helpers the core uses.
 `stubs/Trace.cpp` is built instead of `node/Trace.cpp`: remote tracing, which a
 network's controller can switch on, does nothing here.
 
-The build's limits (`native/zt/Makefile`): receive queue 8, rules 64, routes 32,
-specialists 16, capabilities 8, tags 8, assigned addresses 8, paths per peer 8.
+The build's limits (`native/zt/Makefile`): receive queue 8, rules 64, routes 16,
+specialists 16, capabilities 2, tags 8, assigned addresses 8, paths per peer 8,
+multicast subscriptions 64, 4 pending multicasts per group.

@@ -1,0 +1,79 @@
+--- a/node/Multicaster.cpp
++++ b/node/Multicaster.cpp
+@@ -257,9 +257,25 @@
+ 			}
+ 		}
+ 		else {
++#ifdef ZT_MULTICAST_TX_QUEUE_SIZE
++			// Those past their time go now, not at the next housekeeping run
++			// (every 30 s): each holds a whole packet.
++			for (std::list<OutboundMulticast>::iterator tx(gs.txQueue.begin()); tx != gs.txQueue.end();) {
++				if (tx->expired(now)) {
++					gs.txQueue.erase(tx++);
++				}
++				else {
++					++tx;
++				}
++			}
++			while (gs.txQueue.size() >= ZT_MULTICAST_TX_QUEUE_SIZE) {
++				gs.txQueue.pop_front();
++			}
++#else
+ 			while (gs.txQueue.size() >= ZT_TX_QUEUE_SIZE) {
+ 				gs.txQueue.pop_front();
+ 			}
++#endif
+ 
+ 			const unsigned int gatherLimit = (limit - (unsigned int)gs.members.size()) + 1;
+ 
+--- a/node/OutboundMulticast.cpp
++++ b/node/OutboundMulticast.cpp
+@@ -63,18 +63,29 @@
+ 	dest.mac().appendTo(_packet);
+ 	_packet.append((uint32_t)dest.adi());
+ 	_packet.append((uint16_t)etherType);
++#ifdef ZT_COMPACT_OUTBOUND_MULTICAST
++	// One copy of the frame, in the packet (never compressed in this mode,
++	// so it can be read back from there), instead of three.
++	_frameOffset = _packet.size();
+ 	_packet.append(payload, _frameLen);
++#else
++	_packet.append(payload, _frameLen);
+ 	if (! disableCompression) {
+ 		_packet.compress();
+ 	}
+ 
+ 	memcpy(_frameData, payload, _frameLen);
++#endif
+ }
+ 
+ void OutboundMulticast::sendOnly(const RuntimeEnvironment* RR, void* tPtr, const Address& toAddr)
+ {
+ 	const SharedPtr<Network> nw(RR->node->network(_nwid));
+ 	uint8_t QoSBucket = 255;   // Dummy value
++#ifdef ZT_COMPACT_OUTBOUND_MULTICAST
++	const uint8_t* const _frameData = reinterpret_cast<const uint8_t*>(_packet.data()) + _frameOffset;
++	Packet _tmp;   // the copy the switch encrypts; ours is kept for the next recipient
++#endif
+ 	if ((nw) && (nw->filterOutgoingPacket(tPtr, true, RR->identity.address(), toAddr, _macSrc, _macDest, _frameData, _frameLen, _etherType, 0, QoSBucket))) {
+ 		nw->pushCredentialsIfNeeded(tPtr, toAddr, RR->node->now());
+ 		_packet.newInitializationVector();
+--- a/node/OutboundMulticast.hpp
++++ b/node/OutboundMulticast.hpp
+@@ -153,9 +153,16 @@
+ 	unsigned int _limit;
+ 	unsigned int _frameLen;
+ 	unsigned int _etherType;
++#ifdef ZT_COMPACT_OUTBOUND_MULTICAST
++	Packet _packet;
++	unsigned int _frameOffset;	 // where the frame is in _packet
++#else
+ 	Packet _packet, _tmp;
++#endif
+ 	std::vector<Address> _alreadySentTo;
++#ifndef ZT_COMPACT_OUTBOUND_MULTICAST
+ 	uint8_t _frameData[ZT_MAX_MTU];
++#endif
+ };
+ 
+ }	// namespace ZeroTier

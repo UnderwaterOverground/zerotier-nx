@@ -1,0 +1,64 @@
+--- a/node/Network.cpp
++++ b/node/Network.cpp
+@@ -1085,6 +1085,9 @@
+ 
+ 	NetworkConfig* nc = (NetworkConfig*)0;
+ 	uint64_t configUpdateId;
++	// The dictionary a complete config was parsed from (it stays in its slot
++	// until the next update starts arriving).
++	const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>* received = (const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>*)0;
+ 	{
+ 		Mutex::Lock _l(_lock);
+ 
+@@ -1213,11 +1216,12 @@
+ 				delete nc;
+ 				nc = (NetworkConfig*)0;
+ 			}
++			received = &(c->data);
+ 		}
+ 	}
+ 
+ 	if (nc) {
+-		this->setConfiguration(tPtr, *nc, true);
++		this->setConfiguration(tPtr, *nc, true, received);
+ 		delete nc;
+ 		return configUpdateId;
+ 	}
+@@ -1228,7 +1232,7 @@
+ 	return 0;
+ }
+ 
+-int Network::setConfiguration(void* tPtr, const NetworkConfig& nconf, bool saveToDisk)
++int Network::setConfiguration(void* tPtr, const NetworkConfig& nconf, bool saveToDisk, const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>* received)
+ {
+ 	if (_destroyed) {
+ 		return 0;
+@@ -1262,7 +1266,16 @@
+ 		_portError = RR->node->configureVirtualNetworkPort(tPtr, _id, &_uPtr, (oldPortInitialized) ? ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_CONFIG_UPDATE : ZT_VIRTUAL_NETWORK_CONFIG_OPERATION_UP, &ctmp);
+ 		_authenticationURL = nconf.authenticationURL;
+ 
+-		if (saveToDisk) {
++		if ((saveToDisk) && (received)) {
++			// What the controller sent is what a restart will parse again:
++			// store it as it is rather than serialising the parsed config,
++			// which takes two more dictionary-sized buffers.
++			uint64_t tmp[2];
++			tmp[0] = _id;
++			tmp[1] = 0;
++			RR->node->stateObjectPut(tPtr, ZT_STATE_OBJECT_NETWORK_CONFIG, tmp, received->data(), received->sizeBytes());
++		}
++		else if (saveToDisk) {
+ 			Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>* const d = new Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>();
+ 			try {
+ 				if (nconf.toDictionary(*d, false)) {
+--- a/node/Network.hpp
++++ b/node/Network.hpp
+@@ -223,7 +223,7 @@
+ 	 * @param saveToDisk Save to disk? Used during loading, should usually be true otherwise.
+ 	 * @return 0 == bad, 1 == accepted but duplicate/unchanged, 2 == accepted and new
+ 	 */
+-	int setConfiguration(void* tPtr, const NetworkConfig& nconf, bool saveToDisk);
++	int setConfiguration(void* tPtr, const NetworkConfig& nconf, bool saveToDisk, const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>* received = (const Dictionary<ZT_NETWORKCONFIG_DICT_CAPACITY>*)0);
+ 
+ 	/**
+ 	 * Set netconf failure to 'access denied' -- called in IncomingPacket when controller reports this

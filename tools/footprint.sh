@@ -8,13 +8,15 @@
 # Exit 3: heap_size.h was rewritten; rebuild. Other: an error.
 set -eu
 cd "$(dirname "$0")/.."
-# 2760 KB. Lower it by what a change saves, never by squeezing the heap below
-# what was measured on a console: ZeroTier's core holds about 470 KB with one
-# network and reached 607 KB (everything included) while joining and under a
-# 50 Mbit/s speed test; overlay_budget_kb adds up to 384 KB for apps'
-# sockets, and each ARP request in flight parks 30 KB for half a minute.
-target=$((0x2B2000))
-min_heap=$((1152 * 1024))
+# 2364 KB. Lower it by what a change saves, never by squeezing the heap below
+# what a console showed: read "heap: ... peak ... largest free" in its log
+# after joining from cold, joining from the stored config, and under load.
+# At 3064 KB (before the config buffers, the reply table and pending
+# multicasts were cut by about 90 KB idle and more at the peaks, and before
+# the update check's TLS left the heap) it held 470 KB idle and peaked at
+# 732. overlay_budget_kb adds up to 384 KB for apps' sockets.
+target=$((0x24F000))
+min_heap=$((832 * 1024))
 elf=switch/sysmodule/zerotier-nx.elf
 header=switch/sysmodule/source/heap_size.h
 readelf=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-readelf

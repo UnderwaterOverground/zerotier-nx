@@ -118,27 +118,26 @@ namespace ams {
         static_assert(MallocBufferSize % os::MemoryPageSize == 0);
         alignas(os::MemoryPageSize) constinit u8 g_malloc_buffer[MallocBufferSize];
 
-        // The engine's own sockets: the update check (TCP); ZeroTier's, DNS,
-        // the runtime's wake pair and the log (UDP). The
-        // transfer memory is the buffer pool for all of them: each socket's
-        // buffers are taken from it, and one that doesn't fit fails with
-        // ENOBUFS. UDP sockets start with a small receive buffer, as only
-        // ZeroTier's needs to be big, and it grows its own
-        // (ztnx_driver.c): at 48 KB each, the small sockets took so much
-        // that once that one had grown, a new DNS socket didn't fit. The
-        // pool keeps the size it had with 48 KB (sb_efficiency sockets'
-        // worth), so ZeroTier's gets what the small sockets no longer take.
-        constexpr u32 UdpRxPoolShare = 0xC000;
+        // The engine's own sockets: the update check (TCP, a 1 KB answer
+        // through the system's TLS); ZeroTier's, DNS, the runtime's wake pair
+        // and the log (UDP). The transfer memory is the buffer pool for all
+        // of them: each socket's buffers are taken from it, and one that
+        // doesn't fit fails with ENOBUFS. Only ZeroTier's socket is big (it
+        // grows its receive buffer to 160 KB, ztnx_driver.c); the rest ask
+        // for 4-8 KB each. The pool is what those need together (about 230
+        // KB with the update check running) and some to spare: libnx's own
+        // formula, with this much in place of one UDP receive buffer.
+        constexpr u32 UdpRxPoolShare = 0x10000;
         consteval size_t BsdTransferMemorySize(const ::SocketInitConfig &c) {
             const u32 sum = c.tcp_tx_buf_max_size + c.tcp_rx_buf_max_size + c.udp_tx_buf_size + UdpRxPoolShare;
             return static_cast<size_t>(c.sb_efficiency) * util::AlignUp(sum, os::MemoryPageSize);
         }
 
         constexpr const ::SocketInitConfig SocketConfig = {
-            .tcp_tx_buf_size = 0x4000,
-            .tcp_rx_buf_size = 0x4000,
-            .tcp_tx_buf_max_size = 0x8000,
-            .tcp_rx_buf_max_size = 0x8000,
+            .tcp_tx_buf_size = 0x2000,
+            .tcp_rx_buf_size = 0x2000,
+            .tcp_tx_buf_max_size = 0x2000,
+            .tcp_rx_buf_max_size = 0x4000,
             .udp_tx_buf_size = 0x2000,
             .udp_rx_buf_size = 0x2000,
             .sb_efficiency = 3,

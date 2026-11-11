@@ -829,7 +829,10 @@ namespace ams::bsd_mitm {
         // Each thread serves one request at a time, and a blocking socket call
         // holds its thread until it completes: allow a few at once.
         constexpr size_t NumThreads = 6;
-        constexpr size_t ThreadStackSize = 0x5000;  // measured: ~9 KB through the socket test suite
+        // No engine code runs on these threads (they only reach the Rust stack
+        // and the real socket service): the deepest handler needs 4.8 KB by
+        // static analysis, and 4 KB was the most seen on a console.
+        constexpr size_t ThreadStackSize = 0x2800;
         alignas(os::MemoryPageSize) constinit u8 g_thread_stacks[NumThreads][ThreadStackSize];
         constinit os::ThreadType g_threads[NumThreads];
 

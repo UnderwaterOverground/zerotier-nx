@@ -73,7 +73,7 @@ namespace ams::ctl {
 
         // SetPaused and Stop wait (a few seconds at most) for the engine loop
         // and other threads.
-        alignas(os::ThreadStackAlignment) constinit u8 g_thread_stack[0x4000];
+        alignas(os::ThreadStackAlignment) constinit u8 g_thread_stack[0x2000];  // 2 KB used
         constinit os::ThreadType g_thread;
 
         void ServerThread(void *) {

@@ -13,6 +13,7 @@
 // with an address), ZTNX_LOG=1 (print status changes to stderr),
 // ZTNX_LOG_LEVEL, ZTNX_ENGINE_STACK (bytes; default the sysmodule's),
 // ZTNX_HEAP_LOG=<ms>, ZTNX_TRACE=1.
+#include <pthread.h>
 #include <thread>
 #include <dlfcn.h>
 #include <errno.h>
@@ -134,6 +135,21 @@ std::atomic<State *> g_state{nullptr};
 // initialized; socket() calls before that must not start anything.
 std::atomic<bool> g_loaded{false};
 __attribute__((constructor)) void OnLoad() { g_loaded.store(true, std::memory_order_release); }
+
+// At exit the engine thread dies with the process. Give it a moment first to
+// send what programs left behind (the last bytes of a connection and its
+// close): iperf3's server, for one, stays "busy" for good if the client's
+// final message never arrives.
+__attribute__((destructor)) void OnUnload() {
+    State *st = g_state.load(std::memory_order_acquire);
+    if (!st || ztnx::Runtime::InInternal()) return;
+    for (int i = 0; i < 50; i++) {
+        const bool busy = st->session->runtime().Read([](ZtnxStack *s) { return ztnx_stack_out_pending(s) || ztnx_net_buffer_usage(s) > 0; });
+        if (!busy) break;
+        usleep(10000);
+    }
+    usleep(20000);
+}
 // While Init runs, the engine thread it starts already makes socket calls;
 // they (and everything else) pass through rather than wait on g_once.
 std::atomic<bool> g_initializing{false};
@@ -220,6 +236,18 @@ T Traced(const char *name, int fd, const ztnx::Result &r) {
     return Ret<T>(r);
 }
 
+// A thread must not be cancelled while it is inside the layer: it may hold
+// the runtime's lock, which would then stay locked for good (iperf3 3.16+
+// cancels its stream threads at the end of a test, and hung in its next
+// call). Cancellation waits until the call returns.
+// (Re-enabling can act on a pending cancellation at once, unwinding from
+// inside the destructor: it must be allowed to.)
+struct NoCancel {
+    int old = 0;
+    NoCancel() { pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old); }
+    ~NoCancel() noexcept(false) { pthread_setcancelstate(old, nullptr); }
+};
+
 }  // namespace
 
 // Socket calls made by the engine itself (its thread, or I/O it performs on
@@ -229,6 +257,7 @@ T Traced(const char *name, int fd, const ztnx::Result &r) {
     extern "C" ret ztnx_##name params {                       \
         ztnx::VSock *v = Layer();                              \
         if (!v) return REAL(name) args;                        \
+        NoCancel no_cancel;                                    \
         return Traced<ret>(#name, FirstArg args, call);        \
     }
 
@@ -244,6 +273,7 @@ extern "C" int ztnx_socket(int d, int t, int p) {
     // when starting threads would crash; only an internet socket can start us.
     ztnx::VSock *v = Layer(/*may_init=*/d == AF_INET || d == AF_INET6);
     if (!v) return REAL(socket)(d, t, p);
+    NoCancel no_cancel;
     return Ret<int>(v->Socket(d, t, p));
 }
 WRAP(int, close, (int fd), (fd), v->Close(fd))
@@ -269,12 +299,14 @@ WRAP(int, setsockopt, (int fd, int lv, int n, const void *val, socklen_t l), (fd
 extern "C" ssize_t ztnx_read(int fd, void *b, size_t n) {
     ztnx::VSock *v = Layer();
     if (!v || !v->IsVirtual(fd)) return REAL(read)(fd, b, n);
+    NoCancel no_cancel;
     return Traced<ssize_t>("read", fd, v->Recv(fd, b, n, 0));
 }
 
 extern "C" ssize_t ztnx_write(int fd, const void *b, size_t n) {
     ztnx::VSock *v = Layer();
     if (!v || !v->IsVirtual(fd)) return REAL(write)(fd, b, n);
+    NoCancel no_cancel;
     return Traced<ssize_t>("write", fd, v->Send(fd, b, n, 0));
 }
 
@@ -285,6 +317,7 @@ extern "C" int ztnx_fcntl(int fd, int cmd, ...) {
     va_end(ap);
     ztnx::VSock *v = Layer();
     if (!v) return REAL(fcntl)(fd, cmd, arg);
+    NoCancel no_cancel;
     return Ret<int>(v->Fcntl(fd, cmd, arg));
 }
 

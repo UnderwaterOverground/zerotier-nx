@@ -737,6 +737,13 @@ namespace ams {
         // identity.secret made on a PC to appear).
         u64 EnsureIdentity() {
             if (const u64 addr = LoadIdentity()) return addr;
+            // The wait can be long and nothing else has started: show it in
+            // the log as it happens (no network of ours yet, so the log's
+            // address can only be reached directly).
+            StartUdpLog();
+            FlushEarlyLog();
+            const u64 entered = armTicksToNs(armGetSystemTick());
+            bool healthy = false;
             Log("identity: none yet; one is made %llu s after power-on, when %llu MB of system memory is free",
                 static_cast<unsigned long long>(IdentityAfterBootNs / 1'000'000'000ull), static_cast<unsigned long long>(IdentityMinFree / 1_MB));
             u64 next_try = 0;
@@ -744,6 +751,12 @@ namespace ams {
             for (u32 round = 0;; round++) {
                 const u64 now = armTicksToNs(armGetSystemTick());  // counts from power-on
                 WatchBootMemory(now);
+                if (!healthy && now - entered > HealthyAfterNs) {
+                    // Waiting isn't crashing: reboots during a long wait
+                    // mustn't trip the crash guard.
+                    healthy = true;
+                    static_cast<void>(fs::DeleteFile(StartingPath));
+                }
                 if (round % 5 == 4) {
                     if (const u64 addr = LoadIdentity()) return addr;
                 }
@@ -1249,12 +1262,21 @@ namespace ams {
             ztnx_net_set_budget(stack, kb * 1024);
             Log("overlay buffer budget: %lu KB", kb);
         }
-        const u16 want_port = cfg.port[0] ? static_cast<u16>(std::strtoul(cfg.port, nullptr, 10)) : 9993;
+        // ZeroTier's usual port is 9993, but so is that of a computer running
+        // ZeroTier on the same LAN, and some routers then hand the answers
+        // of a server both talk to to only one of the two (seen: the console
+        // heard nothing at all). So ours comes from the node's address, as
+        // ZeroTier's own second port does: stable, and nobody else's.
+        const u16 want_port = cfg.port[0] ? static_cast<u16>(std::strtoul(cfg.port, nullptr, 10)) : static_cast<u16>(20000 + node % 45500);
         if (ztnx_driver_open_udp(driver, want_port) != 0 && ztnx_driver_open_udp(driver, 0) != 0) {
             Log("no UDP socket (errno %d); not starting", errno);
             return;
         }
-        Log("udp: port %u%s", ztnx_driver_udp_port(driver), ztnx_driver_udp_port(driver) != want_port ? " (the usual one was taken)" : "");
+        if (ztnx_driver_udp_port(driver) == want_port) {
+            Log("udp: port %u", want_port);
+        } else {
+            Log("udp: port %u (%u was taken)", ztnx_driver_udp_port(driver), want_port);
+        }
 
         std::string error;
         ::ztnx::ZtLinkConfig link_cfg;

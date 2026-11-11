@@ -5,7 +5,10 @@
 # your own controller. The Switch's own ID (10 characters) is in the overlay
 # and in sysmodule.log once it has started; authorize it in the controller.
 network=0123456789abcdef
-# ZeroTier's UDP port (default 9993; another is used if it is taken).
+# The UDP port ZeroTier uses. By default one worked out from this Switch's
+# ZeroTier ID (20000-65499, always the same), so it can't clash with a
+# computer on the same network using ZeroTier's usual 9993. Set it only if
+# you forward a port to the Switch.
 # port=9993
 # Names for addresses on the network, one line each: "host = name address".
 # Apps can then use the name, and Moonlight finds its PC by it. ZeroTier

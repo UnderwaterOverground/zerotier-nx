@@ -95,7 +95,7 @@ typedef struct ZtnxStackStats {
     uint32_t unresolved;      // packets dropped waiting for a neighbour's MAC
     uint32_t unroutable;      // packets with nowhere to go
     uint32_t out_queued;      // IP packets waiting to be sent
-    uint32_t reserved;
+    uint32_t udp_dropped;     // datagrams dropped: the app's socket queue was full
 } ZtnxStackStats;
 
 ZtnxStack *ztnx_stack_new(uint64_t now_ns);

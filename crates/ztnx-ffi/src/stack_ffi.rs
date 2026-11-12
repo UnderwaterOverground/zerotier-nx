@@ -66,7 +66,8 @@ pub struct ZtnxStackStats {
     pub unroutable: u32,
     /// IP packets waiting to be sent.
     pub out_queued: u32,
-    pub reserved: u32,
+    /// Datagrams dropped because the app's UDP socket queue was full.
+    pub udp_dropped: u32,
 }
 
 const _: () = assert!(core::mem::size_of::<ZtnxPrefix>() == 24);
@@ -159,7 +160,7 @@ pub unsafe extern "C" fn ztnx_stack_stats(s: *mut ZtnxStack, out: *mut ZtnxStack
         unresolved: l2.unresolved,
         unroutable: l2.unroutable,
         out_queued: stack.net().outbound_len() as u32,
-        reserved: 0,
+        udp_dropped: stack.net().udp_dropped(),
     };
 }
 

@@ -224,6 +224,9 @@ pub struct Netstack {
     used: usize,
     /// Most overlay buffer bytes that may be allocated at once.
     budget: usize,
+    /// Datagrams for an open UDP socket thrown away because its queue (or the
+    /// budget) was full: the app wasn't reading fast enough.
+    udp_dropped: u32,
     /// Rebuilds IPv4 datagrams that arrived fragmented (see `reasm`).
     reasm: reasm::Reassembler,
     /// The most recent time [`Self::poll`] saw, for ageing out fragments.
@@ -271,6 +274,7 @@ impl Netstack {
             addrs: Vec::new(),
             used: 0,
             budget: BUDGET,
+            udp_dropped: 0,
             reasm: reasm::Reassembler::new(),
             last_now: now,
         }
@@ -352,6 +356,11 @@ impl Netstack {
     /// Overlay buffer bytes in use (TCP socket buffers, queued datagrams).
     pub fn buffer_usage(&self) -> usize {
         self.used
+    }
+
+    /// Datagrams dropped because a UDP socket's queue or the budget was full.
+    pub fn udp_dropped(&self) -> u32 {
+        self.udp_dropped
     }
 
     /// Releases spare queue capacity (see [`crate::trim_vec`]).
@@ -664,8 +673,10 @@ impl Netstack {
             let (_, old) = rx.pop_front().expect("non-empty");
             *rx_bytes -= old.capacity();
             self.used -= old.capacity();
+            self.udp_dropped = self.udp_dropped.wrapping_add(1);
         }
         if *rx_bytes + cost > UDP_RX || self.used.saturating_add(cost) > self.budget {
+            self.udp_dropped = self.udp_dropped.wrapping_add(1);
             return None;  // still no room (other sockets hold the budget): drop
         }
         *rx_bytes += cost;
@@ -1508,10 +1519,13 @@ mod tests {
         assert!(n.buffer_usage() <= UDP_RX);
         let mut buf = [0u8; 4];
         let mut last = None;
+        let mut received = 0u32;
         while let Ok((4, _)) = n.udp_recv_from(u, &mut buf) {
             last = Some(u32::from_be_bytes(buf));
+            received += 1;
         }
         assert_eq!(last, Some(1999), "the newest datagram survives");
+        assert_eq!(n.udp_dropped(), sent - received, "every datagram is delivered or counted as dropped");
         assert_eq!(n.buffer_usage(), 0);
     }
 

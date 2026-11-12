@@ -832,7 +832,8 @@ namespace ams::bsd_mitm {
         // No engine code runs on these threads (they only reach the Rust stack
         // and the real socket service): the deepest handler needs 4.8 KB by
         // static analysis, and 4 KB was the most seen on a console.
-        constexpr size_t ThreadStackSize = 0x2800;
+        constexpr size_t ThreadStackSize = 0x3000;
+        static_assert(ThreadStackSize % os::MemoryPageSize == 0, "thread stacks are whole pages (os::CreateThread aborts otherwise)");
         alignas(os::MemoryPageSize) constinit u8 g_thread_stacks[NumThreads][ThreadStackSize];
         constinit os::ThreadType g_threads[NumThreads];
 

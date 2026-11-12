@@ -317,11 +317,10 @@ impl L2 {
         let tpa = ipv4_at(p, 24);
         let ours = |ip: Ipv4Addr| cfg.addrs.iter().any(|a| a.addr == ip);
         // ZeroTier vouches for the frame's source MAC, not for what the ARP
-        // packet claims: only believe a sender speaking for itself.
-        let learn = sha == src_mac
-            && !is_group(sha)
-            && !ours(spa)
-            && cfg.addrs.iter().any(|a| a.contains(spa) && !a.is_reserved(spa));
+        // packet claims: only believe a sender speaking for itself, and only
+        // for an address we would send to directly (in one of our subnets,
+        // or under a route with no gateway).
+        let learn = sha == src_mac && !is_group(sha) && !ours(spa) && Self::next_hop(cfg, spa) == Some(spa);
         let reply = (op == 1 && ours(tpa) && !is_group(sha)).then_some(Ctl::Reply { to_mac: sha, to_ip: spa, from_ip: tpa });
         if learn {
             self.learn(spa, sha, now);
@@ -820,6 +819,29 @@ mod tests {
         assert_eq!(macs, vec![GW_MAC, PEER_MAC, PEER_MAC]);
         // The packet itself is untouched: it still names the far address.
         assert_eq!(&out[0].payload[16..20], &[192, 168, 50, 9]);
+    }
+
+    #[test]
+    fn a_route_with_no_gateway_reaches_addresses_outside_our_subnet() {
+        let far_ip = Ipv4Addr::new(100, 96, 5, 9);
+        let far_mac = 0x32_aa_bb_cc_dd_77;
+        let mut cfg = config();
+        cfg.routes.push(Route { target: net([100, 96, 5, 0], 24), via: None });
+        let mut l2 = L2::new();
+        l2.configure(cfg);
+        // Asked for by ARP like a neighbour in our own subnet...
+        let out = drain(&mut l2, at(0), vec![ip(far_ip, 8)]);
+        assert_eq!(out.len(), 1);
+        assert_eq!((out[0].dst_mac, out[0].ethertype), (BROADCAST, ETHERTYPE_ARP));
+        assert_eq!(&out[0].payload[24..28], &far_ip.octets());
+        // ...and its answer is believed, so the packet goes out.
+        reply_from(&mut l2, far_ip, far_mac, at(1));
+        let out = drain(&mut l2, at(1), vec![ip(far_ip, 8)]);
+        assert!(out.iter().any(|f| f.dst_mac == far_mac && f.ethertype == ETHERTYPE_IPV4));
+        // An address no route covers is still not learned.
+        let stranger = Ipv4Addr::new(100, 96, 6, 9);
+        reply_from(&mut l2, stranger, 0x32_aa_bb_cc_dd_78, at(2));
+        assert!(drain(&mut l2, at(2), vec![ip(stranger, 8)]).is_empty());
     }
 
     #[test]

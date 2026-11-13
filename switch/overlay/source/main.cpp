@@ -702,7 +702,8 @@ namespace {
             r->drawString(line, false, x + 20, ly, 17, r->a(Grey));
             ly += 25;
             // Rules, routes or addresses beyond what this build holds.
-            if (g_status.truncated) r->drawString("Some of the network's settings didn't fit.", false, x + 20, ly, 15, r->a(Yellow));
+            if (g_status.truncated & 0x01) r->drawString("Too many traffic rules: traffic is blocked.", false, x + 20, ly, 15, r->a(Yellow));
+            else if (g_status.truncated) r->drawString("Some of the network's settings didn't fit.", false, x + 20, ly, 15, r->a(Yellow));
             return;
         }
         if (g_last_error[0] && g_status.state != ZTNX_CTL_PAUSED) DrawTwoLines(r, g_last_error, x + 20, ly, 15, Grey, 46);
@@ -880,9 +881,13 @@ namespace {
             default:                          status = "down"; break;
         }
         if (status[0]) line("Status", status, color);
-        if (g_status.truncated) {
-            r->drawString("Some of its settings didn't fit: rules,", false, x + 20, ty + 8, 15, r->a(Yellow));
-            r->drawString("routes or addresses beyond what", false, x + 20, ty + 28, 15, r->a(Yellow));
+        if (g_status.truncated & 0x01) {  // ZTNX_TRUNCATED_RULES
+            r->drawString("It has more traffic rules than", false, x + 20, ty + 8, 15, r->a(Yellow));
+            r->drawString("zerotier-nx holds, so its traffic is", false, x + 20, ty + 28, 15, r->a(Yellow));
+            r->drawString("blocked. It needs fewer rules.", false, x + 20, ty + 48, 15, r->a(Yellow));
+        } else if (g_status.truncated) {
+            r->drawString("Some of its settings didn't fit:", false, x + 20, ty + 8, 15, r->a(Yellow));
+            r->drawString("routes, addresses or tags beyond what", false, x + 20, ty + 28, 15, r->a(Yellow));
             r->drawString("zerotier-nx holds. See sysmodule.log.", false, x + 20, ty + 48, 15, r->a(Yellow));
         }
     }

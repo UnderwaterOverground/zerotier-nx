@@ -13,7 +13,7 @@ OUT ?= ../../target/zt-$(PLATFORM)
 # The Switch's limits. Hosts build with the same ones, so tests see the same
 # sizes and the same truncation. A network that needs more than these gets the
 # "config too large" flag (patches/zerotier-0006).
-LIMITS := -DZT_RX_QUEUE_SIZE=4 -DZT_MAX_NETWORK_RULES=64 -DZT_MAX_NETWORK_SPECIALISTS=16 \
+LIMITS := -DZT_RX_QUEUE_SIZE=4 -DZT_MAX_NETWORK_RULES=128 -DZT_MAX_NETWORK_SPECIALISTS=16 \
           -DZT_MAX_NETWORK_ROUTES=16 -DZT_MAX_NETWORK_CAPABILITIES=2 -DZT_MAX_NETWORK_TAGS=8 \
           -DZT_MAX_MULTICAST_SUBSCRIPTIONS=64 -DZT_EXPECTING_REPLIES_BUCKET_MASK1=31 \
           -DZT_COMPACT_OUTBOUND_MULTICAST -DZT_MULTICAST_TX_QUEUE_SIZE=4 \

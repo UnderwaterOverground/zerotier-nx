@@ -194,7 +194,13 @@ namespace ams::status {
             if (c.truncated && !g_announced_truncated && !title[0]) {
                 g_announced_truncated = true;
                 util::SNPrintf(title, sizeof title, "ZeroTier: network too large");
-                util::SNPrintf(text, sizeof text, "This network has more rules, routes or tags than the Switch has room for. Some traffic may not work.");
+                if (c.truncated & ZTNX_TRUNCATED_RULES) {
+                    // ZeroTier's rules end by accepting what the earlier ones
+                    // let through: cut short, they let nothing through.
+                    util::SNPrintf(text, sizeof text, "This network has more traffic rules than the Switch has room for, so its traffic is blocked. It needs fewer rules.");
+                } else {
+                    util::SNPrintf(text, sizeof text, "This network has more routes, addresses or tags than the Switch has room for. Some traffic may not work.");
+                }
                 if (!g_last_error[0]) util::SNPrintf(g_last_error, sizeof g_last_error, "%s", text);
                 toast_ms = ConfigToastMs;
             }

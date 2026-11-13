@@ -42,6 +42,7 @@ and on the Switch a mutex on libnx and the two `OSUtils` helpers the core uses.
 `stubs/Trace.cpp` is built instead of `node/Trace.cpp`: remote tracing, which a
 network's controller can switch on, does nothing here.
 
-The build's limits (`native/zt/Makefile`): receive queue 4, rules 64, routes 16,
-specialists 16, capabilities 2, tags 8, assigned addresses 8, paths per peer 8,
-multicast subscriptions 64, 4 pending multicasts per group.
+The build's limits (`native/zt/Makefile`): receive queue 4, rules 128, routes 16,
+specialists 16, capabilities 2, tags 8, assigned addresses 8, paths per peer 4,
+multicast subscriptions 64, 4 pending multicasts per group, 48 peers
+remembered, 128 paths, 32 reports of our own address.

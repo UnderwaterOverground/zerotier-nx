@@ -1429,6 +1429,21 @@ namespace ams {
                     static_cast<unsigned long long>(zt.wire_out_failed), ttl_failures, send_errno, static_cast<unsigned long long>(zt.frames_in),
                     static_cast<unsigned long long>(zt.frames_out), net.arp_broadcasts, net.arp_limited, net.unresolved, net.unroutable,
                     net.udp_dropped, static_cast<unsigned long long>(loop.rounds), static_cast<unsigned long long>(loop.wakes));
+                {
+                    // Where the engine thread's time went since the last of
+                    // these lines: near 100% busy means it, not the network,
+                    // limits what gets through.
+                    static auto prev_loop = loop;
+                    static u64 prev_loop_at = 0;
+                    if (prev_loop_at != 0 && now > prev_loop_at) {
+                        const u64 wall = now - prev_loop_at;
+                        const auto pct = [wall](u64 to, u64 from) { return static_cast<unsigned>(std::min<u64>((to - from) * 100 / wall, 100)); };
+                        Log("loop: busy %u%% (reading the socket %u%%, zerotier %u%%, waiting for the lock %u%%)", 100 - pct(loop.poll_ns, prev_loop.poll_ns),
+                            pct(loop.recv_ns, prev_loop.recv_ns), pct(loop.engine_ns, prev_loop.engine_ns), pct(loop.lock_ns, prev_loop.lock_ns));
+                    }
+                    prev_loop = loop;
+                    prev_loop_at = now;
+                }
                 stack_watch::Log();
             }
             int bsd_errno = 0;

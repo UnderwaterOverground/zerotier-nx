@@ -167,8 +167,15 @@ public:
     struct Stats {
         uint64_t rounds;  // loop rounds
         uint64_t wakes;   // wake-up datagrams sent to the engine thread
+        // Where the engine thread's time went, in nanoseconds since start.
+        // What is left of the wall clock is the rounds' other work (the
+        // exchange with the stack, sending, the tick).
+        uint64_t poll_ns;    // asleep in poll(): idle
+        uint64_t recv_ns;    // reading datagrams from the socket
+        uint64_t engine_ns;  // the engine taking them (decrypting, reassembling)
+        uint64_t lock_ns;    // waiting for the lock at the end of a round
     };
-    Stats GetStats() const { return {rounds_.load(), wakes_.load()}; }
+    Stats GetStats() const { return {rounds_.load(), wakes_.load(), poll_ns_.load(), recv_ns_.load(), engine_ns_.load(), lock_ns_.load()}; }
 
 private:
     Runtime() = default;
@@ -250,6 +257,7 @@ private:
     std::unique_ptr<uint8_t[]> out_buf_;
 
     std::atomic<uint64_t> rounds_{0}, wakes_{0};
+    std::atomic<uint64_t> poll_ns_{0}, recv_ns_{0}, engine_ns_{0}, lock_ns_{0};
 };
 
 }  // namespace ztnx

@@ -338,7 +338,10 @@ void Runtime::Loop(const std::function<void()> *on_tick) {
         fds[n].events = POLLIN;
         fds[n].revents = 0;
         const int nfds = n + (wake_rx_ >= 0 ? 1 : 0);
+        const uint64_t poll_from = ztnx_driver_now_ns();
         const int rc = ztnx_driver_poll(driver_, fds, nfds, wait);
+        const uint64_t poll_to = ztnx_driver_now_ns();
+        poll_ns_.fetch_add(poll_to - poll_from, std::memory_order_relaxed);
         polling_.store(false, std::memory_order_release);
         if (rc > 0 && wake_rx_ >= 0 && (fds[n].revents & POLLIN)) {
             char buf[64];
@@ -346,7 +349,10 @@ void Runtime::Loop(const std::function<void()> *on_tick) {
             }
         }
         if (rc > 0) {
+            const uint64_t recv_from = ztnx_driver_now_ns();
             const int got = ztnx_driver_recv(driver_, fds);
+            const uint64_t recv_to = ztnx_driver_now_ns();
+            recv_ns_.fetch_add(recv_to - recv_from, std::memory_order_relaxed);
             for (int i = 0; i < got; i++) {
                 const uint8_t *data;
                 size_t len;
@@ -374,6 +380,7 @@ void Runtime::Loop(const std::function<void()> *on_tick) {
                     lock.unlock();
                 }
             }
+            engine_ns_.fetch_add(ztnx_driver_now_ns() - recv_to, std::memory_order_relaxed);
         }
         const uint64_t now = ztnx_driver_now_ns();
         if (on_tick && *on_tick && now - last_tick >= kTickEveryNs) {
@@ -383,7 +390,9 @@ void Runtime::Loop(const std::function<void()> *on_tick) {
         engine_wait_ms = ops_.background ? ops_.background(ops_.ctx) : kMaxWaitMs;
         if (ops_.after) ops_.after(ops_.ctx);
 
+        const uint64_t lock_from = ztnx_driver_now_ns();
         LockForLoop(lock);
+        lock_ns_.fetch_add(ztnx_driver_now_ns() - lock_from, std::memory_order_relaxed);
         lock_depth_++;
     }
     lock_depth_--;

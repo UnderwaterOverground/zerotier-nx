@@ -7,7 +7,10 @@
 //
 //   zt-smoke --state DIR --join NWID [--port N] [--gen-identity]
 //            [--udp-echo IP:PORT] [--udp-echo-size BYTES]
-//            [--tcp-echo-server PORT] [--for SECONDS]
+//            [--tcp-echo-server PORT] [--for SECONDS] [--report SECONDS]
+//
+// --report prints "heap: N KB in use, M peers" that often (glibc only: what
+// malloc has handed out), to see what a network's size costs.
 //
 // Exit status 0 if everything asked for happened within --for seconds
 // (default 60): the network came up with an address, and the UDP echo, if
@@ -28,6 +31,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 
 #include "ztnx.h"
 #include "ztnx_engine.h"
@@ -47,6 +53,7 @@ struct Options {
     size_t udp_echo_size = 14;
     uint16_t tcp_echo_server = 0;
     int seconds = 60;
+    int report = 0;  // seconds between "heap:" lines; 0 for none
 };
 
 struct App {
@@ -256,6 +263,8 @@ int main(int argc, char **argv) {
             app.opt.tcp_echo_server = (uint16_t)atoi(v), i++;
         } else if (a == "--for") {
             app.opt.seconds = atoi(v), i++;
+        } else if (a == "--report") {
+            app.opt.report = atoi(v), i++;
         } else {
             fprintf(stderr, "unknown option %s\n", a.c_str());
             return 2;
@@ -316,10 +325,23 @@ int main(int argc, char **argv) {
     const uint64_t t0 = mono_ns();
     const uint64_t give_up = t0 + (uint64_t)app.opt.seconds * 1000000000ull;
 
+    uint64_t next_report = t0;
     while (mono_ns() < give_up) {
         const int64_t now_ms = zt_now(app);
         if (now_ms >= ztnx_engine_deadline_ms(app.engine)) ztnx_engine_background(app.engine, now_ms);
         exchange(app);
+        if (app.opt.report > 0 && mono_ns() >= next_report) {
+            next_report += (uint64_t)app.opt.report * 1000000000ull;
+            size_t in_use = 0;
+#ifdef __GLIBC__
+            const struct mallinfo2 m = mallinfo2();
+            in_use = m.uordblks + m.hblkhd;
+#endif
+            // Read before counting peers: the count itself allocates.
+            ZtnxPeerInfo one;
+            const size_t n_peers = ztnx_engine_peers(app.engine, &one, 1, now_ms);
+            say("heap: %zu KB in use, %zu peers", in_use / 1024, n_peers);
+        }
 
         if (app.up && !announced_up) {
             announced_up = true;

@@ -358,7 +358,7 @@ int main(int argc, char **argv) {
                 last_echo_try = echo_sent_at = mono_ns();
                 ztnx_net_udp_sendto(app.stack, echo_sock, echo_payload.data(), echo_payload.size(), &app.opt.udp_echo);
             }
-            uint8_t buf[4096];
+            static uint8_t buf[16384];  // --udp-echo-size can be a jumbo network's datagram
             ZtnxAddr from;
             const int32_t got = (!echo_ok && echo_sock > 0) ? ztnx_net_udp_recvfrom(app.stack, echo_sock, buf, sizeof buf, &from) : 0;
             if (got > 0 && ((size_t)got != echo_payload.size() || memcmp(buf, echo_payload.data(), (size_t)got) != 0)) {

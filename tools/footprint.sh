@@ -12,7 +12,8 @@ cd "$(dirname "$0")/.."
 # sibling projects take). On a console the heap held 308 KB idle with one
 # network and peaked at 576 KB while joining from the stored config; apps'
 # sockets add up to overlay_budget_kb (320 by default, 384 at most), a
-# config update about 90 KB for a moment, each peer 1.5 KB. At 820 KB the
+# config update about 90 KB for a moment, each peer about 5 KB (at most 48
+# are remembered: about 220 KB on a network that large and busy). At 820 KB the
 # largest free block was down to 132 KB, so the heap is not squeezed to the
 # measured peak: lower the target by what a change saves elsewhere instead.
 target=$((0x255000))

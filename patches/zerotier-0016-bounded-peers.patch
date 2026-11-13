@@ -1,0 +1,316 @@
+--- a/node/Network.cpp
++++ b/node/Network.cpp
+@@ -1848,6 +1848,20 @@
+ Membership& Network::_membership(const Address& a)
+ {
+ 	// assumes _lock is locked
++#ifdef ZT_MAX_PEERS
++	// clean() drops the memberships of peers that are gone, but only every
++	// half minute: with a ceiling on peers, don't let these outgrow it between.
++	if ((_memberships.size() >= (ZT_MAX_PEERS + 16)) && (! _memberships.contains(a))) {
++		Address* ma = (Address*)0;
++		Membership* m = (Membership*)0;
++		Hashtable<Address, Membership>::Iterator i(_memberships);
++		while (i.next(ma, m)) {
++			if (! RR->topology->getPeerNoCache(*ma)) {
++				_memberships.erase(*ma);
++			}
++		}
++	}
++#endif
+ 	return _memberships[a];
+ }
+ 
+--- a/node/Node.cpp
++++ b/node/Node.cpp
+@@ -565,6 +565,82 @@
+ 	status->publicIdentity = RR->publicIdentityStr;
+ 	status->secretIdentity = RR->secretIdentityStr;
+ 	status->online = _online ? 1 : 0;
++}
++
++namespace {
++
++struct _PeerSummaries {
++	const RuntimeEnvironment* RR;
++	int64_t now;
++	Node::PeerSummary* out;
++	unsigned long max;
++	unsigned long kept;
++	unsigned long total;
++};
++
++// Topology::eachPeer copies its function object: the state is behind a pointer.
++struct _SummarizePeer {
++	_PeerSummaries* const s;
++	_SummarizePeer(_PeerSummaries* st) : s(st)
++	{
++	}
++
++	inline void operator()(Topology& t, const SharedPtr<Peer>& p)
++	{
++		++s->total;
++		const uint64_t address = p->address().toInt();
++		// Keep the max lowest addresses, in order.
++		unsigned long at = s->kept;
++		while ((at > 0) && (s->out[at - 1].address > address)) {
++			--at;
++		}
++		if (at >= s->max) {
++			return;
++		}
++		if (s->kept < s->max) {
++			++s->kept;
++		}
++		for (unsigned long k = s->kept - 1; k > at; --k) {
++			s->out[k] = s->out[k - 1];
++		}
++		Node::PeerSummary& o = s->out[at];
++		memset(&o, 0, sizeof(o));
++		o.address = address;
++		if (p->remoteVersionKnown()) {
++			o.versionMajor = (int16_t)p->remoteVersionMajor();
++			o.versionMinor = (int16_t)p->remoteVersionMinor();
++			o.versionRev = (int16_t)p->remoteVersionRevision();
++		}
++		else {
++			o.versionMajor = -1;
++			o.versionMinor = -1;
++			o.versionRev = -1;
++		}
++		const unsigned int latency = p->latency(s->now);
++		o.latency = (latency >= 0x7fff) ? (int16_t)-1 : (int16_t)latency;
++		o.role = (uint8_t)t.role(p->address());
++		const SharedPtr<Path> best(p->getAppropriatePath(s->now, false));
++		if ((best) && (best->address().ss_family == AF_INET)) {
++			o.ip4 = reinterpret_cast<const struct sockaddr_in*>(&(best->address()))->sin_addr.s_addr;
++			o.port = (uint16_t)best->address().port();
++			o.lastReceive = best->lastIn();
++		}
++	}
++};
++
++}	// anonymous namespace
++
++unsigned long Node::peerSummaries(PeerSummary* out, unsigned long max) const
++{
++	_PeerSummaries s;
++	s.RR = RR;
++	s.now = _now;
++	s.out = out;
++	s.max = max;
++	s.kept = 0;
++	s.total = 0;
++	RR->topology->eachPeer(_SummarizePeer(&s));
++	return s.total;
+ }
+ 
+ ZT_PeerList* Node::peers() const
+--- a/node/Node.hpp
++++ b/node/Node.hpp
+@@ -83,6 +83,31 @@
+ 	uint64_t address() const;
+ 	void status(ZT_NodeStatus* status) const;
+ 	ZT_PeerList* peers() const;
++
++	/**
++	 * One peer, briefly. peers() allocates about 4 KB per peer for its answer;
++	 * this allocates nothing.
++	 */
++	struct PeerSummary {
++		uint64_t address;
++		int64_t lastReceive;   // on the path below; 0 if there is none
++		uint32_t ip4;		   // the best direct path's IPv4 address (network byte order); 0 if relayed
++		uint16_t port;
++		int16_t latency;	   // milliseconds; -1 if unknown
++		int16_t versionMajor;  // -1 if unknown
++		int16_t versionMinor;
++		int16_t versionRev;
++		uint8_t role;		   // ZT_PeerRole
++	};
++
++	/**
++	 * Fill in the peers with the lowest addresses, in order
++	 *
++	 * @param out Room for max summaries
++	 * @param max How many to write at most
++	 * @return How many peers there are (can exceed max)
++	 */
++	unsigned long peerSummaries(PeerSummary* out, unsigned long max) const;
+ 	ZT_VirtualNetworkConfig* networkConfig(uint64_t nwid) const;
+ 	ZT_VirtualNetworkList* networks() const;
+ 	void freeQueryResult(void* qr);
+--- a/node/Peer.cpp
++++ b/node/Peer.cpp
+@@ -27,6 +27,7 @@
+ 
+ Peer::Peer(const RuntimeEnvironment* renv, const Identity& myIdentity, const Identity& peerIdentity)
+ 	: RR(renv)
++	, _created(renv->node->now())
+ 	, _lastReceive(0)
+ 	, _lastNontrivialReceive(0)
+ 	, _lastTriedMemorizedPath(0)
+--- a/node/Peer.hpp
++++ b/node/Peer.hpp
+@@ -299,6 +299,14 @@
+ 	}
+ 
+ 	/**
++	 * @return When we last heard from this peer, or when we first learned of it if we never have
++	 */
++	inline int64_t lastHeardOrCreated() const
++	{
++		return (_lastReceive > _created) ? _lastReceive : _created;
++	}
++
++	/**
+ 	 * @return True if we've heard from this peer in less than ZT_PEER_ACTIVITY_TIMEOUT
+ 	 */
+ 	inline bool isAlive(const int64_t now) const
+@@ -679,6 +687,7 @@
+ 
+ 	const RuntimeEnvironment* RR;
+ 
++	int64_t _created;				  // when this object was made
+ 	int64_t _lastReceive;			  // direct or indirect
+ 	int64_t _lastNontrivialReceive;	  // frames, things like netconf, etc.
+ 	int64_t _lastTriedMemorizedPath;
+--- a/node/SelfAwareness.cpp
++++ b/node/SelfAwareness.cpp
+@@ -59,6 +59,13 @@
+ 	}
+ 
+ 	Mutex::Lock _l(_phy_m);
++#ifdef ZT_SELFAWARENESS_MAX_ENTRIES
++	// One entry per reporting peer and path adds up on a large network. Past
++	// the ceiling only roots add new ones (they are few, and the ones trusted).
++	if ((! trusted) && (_phy.size() >= ZT_SELFAWARENESS_MAX_ENTRIES) && (! _phy.contains(PhySurfaceKey(reporter, receivedOnLocalSocket, reporterPhysicalAddress, scope)))) {
++		return;
++	}
++#endif
+ 	PhySurfaceEntry& entry = _phy[PhySurfaceKey(reporter, receivedOnLocalSocket, reporterPhysicalAddress, scope)];
+ 
+ 	if ((trusted) && ((now - entry.ts) < ZT_SELFAWARENESS_ENTRY_TIMEOUT) && (! entry.mySurface.ipsEqual(myPhysicalAddress))) {
+--- a/node/Topology.cpp
++++ b/node/Topology.cpp
+@@ -76,6 +76,11 @@
+ 	SharedPtr<Peer> np;
+ 	{
+ 		Mutex::Lock _l(_peers_m);
++#ifdef ZT_MAX_PEERS
++		if ((_peers.size() >= ZT_MAX_PEERS) && (! _peers.contains(peer->address()))) {
++			_forgetOldestPeer(tPtr, peer->address());
++		}
++#endif
+ 		SharedPtr<Peer>& hp = _peers[peer->address()];
+ 		if (! hp) {
+ 			hp = peer;
+@@ -112,6 +117,11 @@
+ 			if (ap) {
+ 				return ap;
+ 			}
++#ifdef ZT_MAX_PEERS
++			if (_peers.size() > ZT_MAX_PEERS) {
++				_forgetOldestPeer(tPtr, zta);
++			}
++#endif
+ 			ap = Peer::deserializeFromCache(RR->node->now(), tPtr, buf, RR);
+ 			if (! ap) {
+ 				_peers.erase(zta);
+@@ -419,7 +429,39 @@
+ 	_moonSeeds.swap(cm);
+ 
+ 	_memoizeUpstreams(tPtr);
++}
++
++#ifdef ZT_MAX_PEERS
++// A fixed heap: the peer table has a ceiling. When a new peer needs a place,
++// the one heard from longest ago (never a root, never `keep`) gives it up; it
++// is learned again if it turns out to matter. Assumes _peers_m is locked.
++void Topology::_forgetOldestPeer(void* tPtr, const Address& keep)
++{
++	Mutex::Lock _l2(_upstreams_m);
++	Hashtable<Address, SharedPtr<Peer> >::Iterator i(_peers);
++	Address* a = (Address*)0;
++	SharedPtr<Peer>* p = (SharedPtr<Peer>*)0;
++	Address oldest;
++	int64_t oldestHeard = 0;
++	while (i.next(a, p)) {
++		if ((*a == keep) || (! *p) || (std::find(_upstreamAddresses.begin(), _upstreamAddresses.end(), *a) != _upstreamAddresses.end())) {
++			continue;
++		}
++		const int64_t heard = (*p)->lastHeardOrCreated();
++		if ((! oldest) || (heard < oldestHeard)) {
++			oldest = *a;
++			oldestHeard = heard;
++		}
++	}
++	if (oldest) {
++		const SharedPtr<Peer>* const op = _peers.get(oldest);
++		if (op) {
++			_savePeer(tPtr, *op);
++		}
++		_peers.erase(oldest);
++	}
+ }
++#endif
+ 
+ void Topology::doPeriodicTasks(void* tPtr, int64_t now)
+ {
+--- a/node/Topology.hpp
++++ b/node/Topology.hpp
+@@ -94,11 +94,32 @@
+ 	inline SharedPtr<Path> getPath(const int64_t l, const InetAddress& r)
+ 	{
+ 		Mutex::Lock _l(_paths_m);
++#ifdef ZT_MAX_PATHS
++		// A fixed heap: every address that sends a datagram, valid or not,
++		// gets a Path here, so the table has a ceiling. When it is full of
++		// paths in use, a new address is served by a Path that is not kept
++		// (a peer that learns it holds its own reference).
++		const Path::HashKey key(l, r);
++		const SharedPtr<Path>* const known = _paths.get(key);
++		if (known) {
++			return *known;
++		}
++		if (_paths.size() >= ZT_MAX_PATHS) {
++			_forgetUnusedPaths();
++			if (_paths.size() >= ZT_MAX_PATHS) {
++				return SharedPtr<Path>(new Path(l, r));
++			}
++		}
++		SharedPtr<Path>& p = _paths[key];
++		p.set(new Path(l, r));
++		return p;
++#else
+ 		SharedPtr<Path>& p = _paths[Path::HashKey(l, r)];
+ 		if (! p) {
+ 			p.set(new Path(l, r));
+ 		}
+ 		return p;
++#endif
+ 	}
+ 
+ 	/**
+@@ -411,6 +432,21 @@
+ 	Identity _getIdentity(void* tPtr, const Address& zta);
+ 	void _memoizeUpstreams(void* tPtr);
+ 	void _savePeer(void* tPtr, const SharedPtr<Peer>& peer);
++#ifdef ZT_MAX_PEERS
++	void _forgetOldestPeer(void* tPtr, const Address& keep);
++#endif
++	// Assumes _paths_m is locked.
++	inline void _forgetUnusedPaths()
++	{
++		Hashtable<Path::HashKey, SharedPtr<Path> >::Iterator i(_paths);
++		Path::HashKey* k = (Path::HashKey*)0;
++		SharedPtr<Path>* p = (SharedPtr<Path>*)0;
++		while (i.next(k, p)) {
++			if (p->references() <= 1) {
++				_paths.erase(*k);
++			}
++		}
++	}
+ 
+ 	const RuntimeEnvironment* const RR;
+ 

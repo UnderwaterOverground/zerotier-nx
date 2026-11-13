@@ -6,6 +6,7 @@
 #include "Address.hpp"
 #include "Identity.hpp"
 #include "MAC.hpp"
+#include "Node.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -415,40 +416,32 @@ extern "C" void ztnx_engine_multicast_sync(ZtnxEngine* e, const uint32_t* ipv4_b
 
 extern "C" size_t ztnx_engine_peers(ZtnxEngine* e, ZtnxPeerInfo* out, size_t max, int64_t now_ms)
 {
-	ZT_PeerList* list = ZT_Node_peers(e->node);
-	if (! list) {
-		return 0;
+	// Not ZT_Node_peers: that allocates about 4 KB per peer for its answer.
+	ZeroTier::Node::PeerSummary peers[ZTNX_ENGINE_PEERS_MAX];
+	if (max > ZTNX_ENGINE_PEERS_MAX) {
+		max = ZTNX_ENGINE_PEERS_MAX;
 	}
-	const size_t total = list->peerCount;
+	const size_t total = reinterpret_cast<ZeroTier::Node*>(e->node)->peerSummaries(peers, (unsigned long)max);
 	for (size_t i = 0; i < total && i < max; ++i) {
-		const ZT_Peer& p = list->peers[i];
+		const ZeroTier::Node::PeerSummary& p = peers[i];
 		ZtnxPeerInfo& o = out[i];
 		memset(&o, 0, sizeof(o));
 		o.address = p.address;
 		o.latency_ms = p.latency;
-		o.role = (uint8_t)p.role;
+		o.role = p.role;
 		if (p.versionMajor >= 0) {
 			o.version[0] = (uint8_t)p.versionMajor;
 			o.version[1] = (uint8_t)p.versionMinor;
 			o.version[2] = (uint8_t)p.versionRev;
 		}
-		for (unsigned int j = 0; j < p.pathCount; ++j) {
-			const ZT_PeerPhysicalPath& path = p.paths[j];
-			if (path.expired || path.address.ss_family != AF_INET) {
-				continue;
-			}
-			if (o.direct && ! path.preferred) {
-				continue;
-			}
-			const struct sockaddr_in* in = reinterpret_cast<const struct sockaddr_in*>(&path.address);
+		if (p.ip4) {
 			o.direct = 1;
-			memcpy(o.path_ip, &in->sin_addr.s_addr, 4);
-			o.path_port = ntohs(in->sin_port);
-			const int64_t ago = now_ms - (int64_t)path.lastReceive;
+			memcpy(o.path_ip, &p.ip4, 4);
+			o.path_port = p.port;
+			const int64_t ago = now_ms - p.lastReceive;
 			o.last_rx_ms = (uint32_t)(ago < 0 ? 0 : (ago > 0xffffffffLL ? 0xffffffffLL : ago));
 		}
 	}
-	ZT_Node_freeQueryResult(e->node, list);
 	return total;
 }
 

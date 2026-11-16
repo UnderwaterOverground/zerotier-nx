@@ -130,6 +130,14 @@ EngineOps ZtLink::Ops() {
     ops.background = [](void *ctx) -> int {
         auto *self = static_cast<ZtLink *>(ctx);
         int64_t now = self->Now();
+        // The socket service dropped our socket (the network went away
+        // without a sleep): reopen it, once a second at most, and tell
+        // ZeroTier, as after a wake.
+        if (ztnx_driver_broken(self->driver_) && now - self->last_reopen_ms_ >= 1000) {
+            self->last_reopen_ms_ = now;
+            if (ztnx_driver_reopen(self->driver_) == 0)
+                ztnx_engine_network_up(self->engine_, self->local_ip_be_.load(), ztnx_driver_udp_port(self->driver_), now);
+        }
         if (now >= ztnx_engine_deadline_ms(self->engine_)) {
             ztnx_engine_background(self->engine_, now);
             now = self->Now();
@@ -148,6 +156,10 @@ EngineOps ZtLink::Ops() {
                 ztnx_engine_leave(self->engine_);
                 break;
             case kNetworkUp:
+                // A new or returning LAN address: the old socket may be bound
+                // to the network that went away. Reopen it (same port).
+                ztnx_driver_reopen(self->driver_);
+                self->last_reopen_ms_ = self->Now();
                 ztnx_engine_network_up(self->engine_, self->local_ip_be_.load(), ztnx_driver_udp_port(self->driver_), self->Now());
                 break;
         }

@@ -57,7 +57,16 @@ struct ZtnxDriver {
     // limit that couldn't be set; and how many of those there were.
     int send_errno;
     unsigned int send_ttl_failures;
+    // The socket service has dropped the UDP socket (it does when the
+    // network goes away, e.g. Airplane Mode, without a sleep): every send
+    // fails and poll() returns at once. The engine thread reopens it
+    // (ztnx_driver_reopen); reopens counts how often.
+    int broken;
+    unsigned int reopens;
 };
+
+// Errors that mean the socket itself is gone, not that a datagram failed.
+static int socket_gone(int e) { return e == EPIPE || e == EBADF || e == ENOTSOCK || e == ENOTCONN; }
 
 uint64_t ztnx_driver_now_ns(void) {
     struct timespec ts;
@@ -144,6 +153,7 @@ void ztnx_driver_suspend(ZtnxDriver *d) {
         close(d->udp_fd);
         d->udp_fd = -1;
     }
+    d->broken = 0;
     d->backlog = 0;
     d->n_staged = 0;
     d->poll_udp = -1;
@@ -153,6 +163,20 @@ int ztnx_driver_resume(ZtnxDriver *d) {
     if (d->udp_fd >= 0 || !d->udp_port) return 0;
     // Same port as before, so peers' notion of our endpoint stays valid.
     return ztnx_driver_open_udp(d, d->udp_port) == 0 ? 0 : ztnx_driver_open_udp(d, 0);
+}
+
+int ztnx_driver_broken(const ZtnxDriver *d) { return d->broken; }
+
+unsigned int ztnx_driver_reopens(const ZtnxDriver *d) { return d->reopens; }
+
+int ztnx_driver_reopen(ZtnxDriver *d) {
+    if (!d->udp_port) return -1;
+    STEP("UDP reopen");
+    ztnx_driver_suspend(d);
+    d->reopens++;
+    if (ztnx_driver_resume(d) == 0) return 0;
+    d->broken = 1;  // e.g. still offline: try again later
+    return -1;
 }
 
 int ztnx_driver_send(ZtnxDriver *d, uint32_t ip_be, uint16_t port, const void *data, size_t len, unsigned int ttl) {
@@ -183,6 +207,7 @@ int ztnx_driver_send(ZtnxDriver *d, uint32_t ip_be, uint16_t port, const void *d
     }
     if (sent == (ssize_t)len) return 0;
     d->send_errno = sent < 0 ? errno : EMSGSIZE;
+    if (sent < 0 && socket_gone(errno)) d->broken = 1;
     return -1;
 }
 
@@ -197,6 +222,7 @@ static ssize_t udp_read(ZtnxDriver *d, uint8_t *buf, size_t cap, struct sockaddr
     socklen_t flen = sizeof *from;
     memset(from, 0, sizeof *from);
     ssize_t got = recvfrom(d->udp_fd, buf, cap, 0, (struct sockaddr *)from, &flen);
+    if (got < 0 && socket_gone(errno)) d->broken = 1;
     if (got < 0 || from->sin_family != AF_INET) return -1;
     return got;
 }
@@ -229,6 +255,8 @@ static int stage_each(ZtnxDriver *d) {
 #define MMSG_CAP ((SBUF_SIZE - 1) / UDP_STAGED - MMSG_HEAD - MMSG_TAIL)
 _Static_assert(MMSG_CAP >= 1500, "batched receive slots must hold a full datagram");
 #define BSD_EAGAIN 11  // the socket service's errno numbering (Linux's)
+// The same errors as socket_gone(), in that numbering.
+static int bsd_socket_gone(int e) { return e == 32 /* EPIPE */ || e == 9 /* EBADF */ || e == 88 /* ENOTSOCK */ || e == 107 /* ENOTCONN */; }
 
 static void put(uint8_t **p, const void *v, size_t n) {
     memcpy(*p, v, n);
@@ -333,6 +361,10 @@ static int stage(ZtnxDriver *d) {
             d->mmsg_state = 1;
             return n;
         }
+        if (n < 0 && bsd_socket_gone(err)) {
+            d->broken = 1;  // the socket, not batching, is what failed
+            return 0;
+        }
         if (n < 0 && err != BSD_EAGAIN) {
             d->mmsg_state = -1;  // unsupported here: one datagram per call
             d->mmsg_errno = err;
@@ -364,7 +396,20 @@ int ztnx_driver_pollfds(ZtnxDriver *d, struct pollfd *fds, int cap) {
 
 int ztnx_driver_recv(ZtnxDriver *d, const struct pollfd *fds) {
     d->n_staged = 0;
-    if (d->udp_fd < 0 || d->poll_udp < 0 || !(fds[d->poll_udp].revents & POLLIN)) return 0;
+    if (d->udp_fd < 0 || d->poll_udp < 0) return 0;
+    const short rev = fds[d->poll_udp].revents;
+    if (rev & POLLNVAL) {
+        d->broken = 1;
+    } else if (rev & (POLLERR | POLLHUP)) {
+        // Reading SO_ERROR clears an error left by an ICMP message (port
+        // unreachable and the like), which would otherwise make every
+        // poll() return at once; only a gone socket needs reopening.
+        int err = 0;
+        socklen_t len = sizeof err;
+        if (getsockopt(d->udp_fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 ? socket_gone(errno) : socket_gone(err))
+            d->broken = 1;
+    }
+    if (d->broken || !(rev & POLLIN)) return 0;
     STEP("UDP receive");
     d->n_staged = stage(d);
     d->backlog = d->n_staged >= UDP_STAGED;

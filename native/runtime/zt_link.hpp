@@ -76,6 +76,7 @@ private:
 
     ZtnxEngine *engine_ = nullptr;
     ZtnxDriver *driver_ = nullptr;
+    int64_t last_reopen_ms_ = 0;  // engine thread
     Runtime *rt_ = nullptr;
     ZtLinkConfig cfg_;
     uint64_t address_ = 0;

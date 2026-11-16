@@ -6,6 +6,9 @@
 // it. So the stack under test talks real ARP, UDP and TCP to something,
 // through the same loop that carries frames to and from ZeroTier.
 #include <arpa/inet.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -262,6 +265,57 @@ int main() {
         std::fclose(f);
     }
     ztnx_seed_rng(seed);
+
+    // ---- A socket the socket service dropped is reopened --------------------
+    // (Horizon drops sockets when the network goes away without a sleep, e.g.
+    // Airplane Mode: sends fail with EPIPE and poll() returns at once.)
+    {
+        ZtnxDriver *d = ztnx_driver_new();
+        CHECK(ztnx_driver_open_udp(d, 0) == 0);
+        const uint16_t port = ztnx_driver_udp_port(d);
+        const int sink = socket(AF_INET, SOCK_DGRAM, 0);
+        sockaddr_in sin = {};
+        sin.sin_family = AF_INET;
+        sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        socklen_t slen = sizeof sin;
+        CHECK(sink >= 0 && bind(sink, reinterpret_cast<sockaddr *>(&sin), sizeof sin) == 0 &&
+              getsockname(sink, reinterpret_cast<sockaddr *>(&sin), &slen) == 0);
+        const auto drop = [&] {
+            pollfd fds[ZTNX_DRIVER_MAX_FDS] = {};
+            CHECK(ztnx_driver_pollfds(d, fds, ZTNX_DRIVER_MAX_FDS) == 1);
+            close(fds[0].fd);
+        };
+        const auto delivered = [&] {
+            const char msg[] = "after reopen";
+            CHECK(ztnx_driver_send(d, sin.sin_addr.s_addr, ntohs(sin.sin_port), msg, sizeof msg, 0) == 0);
+            pollfd p = {sink, POLLIN, 0};
+            char buf[64];
+            return poll(&p, 1, 1000) == 1 && recv(sink, buf, sizeof buf, 0) == static_cast<ssize_t>(sizeof msg);
+        };
+        CHECK(!ztnx_driver_broken(d));
+        // Found by a send.
+        drop();
+        CHECK(ztnx_driver_send(d, sin.sin_addr.s_addr, ntohs(sin.sin_port), "x", 1, 0) == -1);
+        CHECK(ztnx_driver_broken(d));
+        CHECK(ztnx_driver_reopen(d) == 0);
+        CHECK(!ztnx_driver_broken(d) && ztnx_driver_udp_port(d) == port && ztnx_driver_reopens(d) == 1);
+        CHECK(delivered());
+        // Found by poll() (the closed descriptor is reported invalid).
+        drop();
+        pollfd fds[ZTNX_DRIVER_MAX_FDS + 1] = {};
+        const int n = ztnx_driver_pollfds(d, fds, ZTNX_DRIVER_MAX_FDS);
+        CHECK(ztnx_driver_poll(d, fds, n, 100) >= 1);
+        CHECK(ztnx_driver_recv(d, fds) == 0);
+        CHECK(ztnx_driver_broken(d));
+        CHECK(ztnx_driver_reopen(d) == 0 && ztnx_driver_udp_port(d) == port && ztnx_driver_reopens(d) == 2);
+        CHECK(delivered());
+        // An explicit suspend is not a broken socket.
+        ztnx_driver_suspend(d);
+        CHECK(!ztnx_driver_broken(d));
+        close(sink);
+        ztnx_driver_free(d);
+        std::puts("ok: a dropped socket is found (send, poll) and reopened on the same port");
+    }
 
     ZtnxStack *stack = ztnx_stack_new(ztnx_driver_now_ns());
     Configure(stack, kOurMac, kOurIp);

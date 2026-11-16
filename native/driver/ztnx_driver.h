@@ -40,6 +40,14 @@ const char *ztnx_driver_step(void);
 void ztnx_driver_suspend(ZtnxDriver *d);
 int ztnx_driver_resume(ZtnxDriver *d);
 
+// Whether the socket service has dropped the UDP socket (a send or receive
+// said so): the network went away without a sleep, e.g. Airplane Mode. The
+// engine thread then reopens it, same port if possible; reopens counts
+// those. Engine thread only.
+int ztnx_driver_broken(const ZtnxDriver *d);
+int ztnx_driver_reopen(ZtnxDriver *d);
+unsigned int ztnx_driver_reopens(const ZtnxDriver *d);
+
 // Whether the UDP socket is read a burst per call (Switch only): 1 yes, 0
 // not known yet, -1 no (*bsd_errno: the socket service's errno if a call
 // failed, else 0).

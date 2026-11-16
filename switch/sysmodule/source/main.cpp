@@ -202,6 +202,9 @@ namespace ams {
         // While the console sleeps, logging must not touch the socket service
         // (it may be asleep and block the caller): file only.
         constinit std::atomic<bool> g_log_udp_paused = false;
+        // The socket service dropped the log socket (the network went away
+        // without a sleep); the engine loop's network check opens another.
+        constinit std::atomic<bool> g_log_udp_lost = false;
         // log_udp pointing at a tunnel address: lines queue here and the
         // engine loop sends them through the tunnel (works away from the LAN).
         constinit bool g_log_tunnel = false;
@@ -256,7 +259,13 @@ namespace ams {
             for (size_t off = 0; off < n;) {
                 const char *nl = static_cast<const char *>(std::memchr(lines + off, '\n', n - off));
                 const size_t len = nl ? static_cast<size_t>(nl - (lines + off)) + 1 : n - off;
-                ::sendto(g_log_udp_fd, lines + off, len, 0, reinterpret_cast<sockaddr *>(std::addressof(g_log_udp_addr)), sizeof g_log_udp_addr);
+                if (::sendto(g_log_udp_fd, lines + off, len, 0, reinterpret_cast<sockaddr *>(std::addressof(g_log_udp_addr)), sizeof g_log_udp_addr) < 0 &&
+                    (errno == EPIPE || errno == EBADF || errno == ENOTSOCK || errno == ENOTCONN)) {
+                    ::close(g_log_udp_fd);
+                    g_log_udp_fd = -1;
+                    g_log_udp_lost = true;
+                    return;
+                }
                 off += len;
             }
         }
@@ -1370,6 +1379,7 @@ namespace ams {
         bool healthy = false;
         size_t heap_all_peak = 0;
         int batched = 0;  // the driver's batched receive state, as last logged
+        unsigned int reopens = 0;  // the driver's socket reopens, as last logged
         {
             std::scoped_lock lk(g_log_mutex);
             g_log_defer_thread = os::GetCurrentThread();
@@ -1455,6 +1465,10 @@ namespace ams {
                     Log("udp: one datagram per call (batched receive errno %d)", bsd_errno);
                 }
             }
+            if (const unsigned int r = ztnx_driver_reopens(driver); r != reopens) {
+                reopens = r;
+                Log("udp: socket reopened (%u so far; last failed send errno %d)", r, ztnx_driver_send_error(driver, nullptr));
+            }
             FlushTunnelLog(*rt);
             Timed("update check", [&] { StepUpdateCheck(now); });
             if (now - last_check > (ip ? 5'000'000'000ull : 250'000'000ull)) {
@@ -1462,6 +1476,7 @@ namespace ams {
                 u32 cur = 0;
                 Timed("network check", [&] { cur = NetworkUp() ? CurrentIp() : 0; });
                 status::SetOffline(cur == 0);
+                if (cur && g_log_udp_lost.exchange(false)) StartUdpLog();
                 if (cur != ip) {
                     Log("local address changed: %s", cur ? inet_ntoa(in_addr{cur}) : "(offline)");
                     ip = cur;

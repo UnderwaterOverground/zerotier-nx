@@ -1380,6 +1380,7 @@ namespace ams {
         size_t heap_all_peak = 0;
         int batched = 0;  // the driver's batched receive state, as last logged
         unsigned int reopens = 0;  // the driver's socket reopens, as last logged
+        uint64_t wake_remakes = 0;  // the loop's wake pair, the same
         {
             std::scoped_lock lk(g_log_mutex);
             g_log_defer_thread = os::GetCurrentThread();
@@ -1468,6 +1469,10 @@ namespace ams {
             if (const unsigned int r = ztnx_driver_reopens(driver); r != reopens) {
                 reopens = r;
                 Log("udp: socket reopened (%u so far; last failed send errno %d)", r, ztnx_driver_send_error(driver, nullptr));
+            }
+            if (const uint64_t w = rt->GetStats().wake_remakes; w != wake_remakes) {
+                wake_remakes = w;
+                Log("loop: wake sockets remade (%llu so far)", static_cast<unsigned long long>(w));
             }
             FlushTunnelLog(*rt);
             Timed("update check", [&] { StepUpdateCheck(now); });

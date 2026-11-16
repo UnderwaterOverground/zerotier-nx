@@ -256,6 +256,26 @@ int UdpEcho(Runtime &rt, int32_t sock, const std::vector<uint8_t> &payload, std:
     return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
 }
 
+// The runtime's wake pair: the loopback socket another loopback socket is
+// connected to. Returns its receiving end, or -1.
+int FindWakeRx() {
+    for (int fd = 3; fd < 256; fd++) {
+        sockaddr_in peer{};
+        socklen_t len = sizeof peer;
+        if (getpeername(fd, reinterpret_cast<sockaddr *>(&peer), &len) != 0 || peer.sin_family != AF_INET ||
+            peer.sin_addr.s_addr != htonl(INADDR_LOOPBACK))
+            continue;
+        for (int rx = 3; rx < 256; rx++) {
+            sockaddr_in local{};
+            len = sizeof local;
+            if (rx != fd && getsockname(rx, reinterpret_cast<sockaddr *>(&local), &len) == 0 && local.sin_family == AF_INET &&
+                local.sin_addr.s_addr == peer.sin_addr.s_addr && local.sin_port == peer.sin_port)
+                return rx;
+        }
+    }
+    return -1;
+}
+
 }  // namespace
 
 int main() {
@@ -423,6 +443,29 @@ int main() {
         CHECK(second >= 900 && second <= 1500);
         rt->With([&](ZtnxStack *s) { ztnx_net_close(s, tcp); });
         std::printf("ok: the ARP retry went out %d ms after the first\n", static_cast<int>(second));
+    }
+
+    // ---- the system drops the wake pair (Airplane Mode on the console) -----
+    // poll() then reports it invalid at once, every round: the loop must not
+    // spin on it, and must make a new pair.
+    {
+        const int rx = FindWakeRx();
+        CHECK(rx >= 0);
+        std::this_thread::sleep_for(100ms);
+        const auto before = rt->GetStats();
+        close(rx);  // the loop's next poll() finds it invalid
+        CHECK(Eventually([&] { return rt->GetStats().wake_remakes == before.wake_remakes + 1; }, 3000ms));
+        const auto after = rt->GetStats();
+        // An idle loop: a few rounds a second, not hundreds of thousands.
+        CHECK(after.rounds - before.rounds < 200);
+        CHECK(FindWakeRx() >= 0);
+        // Wake-ups work again: an echo comes back long before the loop's
+        // one-second poll would have ended.
+        std::this_thread::sleep_for(200ms);
+        const int ms = UdpEcho(*rt, udp, small);
+        CHECK(ms >= 0 && ms < 300);
+        std::printf("ok: a dropped wake pair is remade (%d rounds meanwhile), wake-ups work (echo in %d ms)\n",
+                    static_cast<int>(after.rounds - before.rounds), ms);
     }
 
     // ---- pause: nothing is sent, and resuming doesn't flood ----------------

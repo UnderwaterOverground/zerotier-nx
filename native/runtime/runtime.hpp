@@ -174,8 +174,11 @@ public:
         uint64_t recv_ns;    // reading datagrams from the socket
         uint64_t engine_ns;  // the engine taking them (decrypting, reassembling)
         uint64_t lock_ns;    // waiting for the lock at the end of a round
+        uint64_t wake_remakes;  // wake pairs replaced after the system dropped them
     };
-    Stats GetStats() const { return {rounds_.load(), wakes_.load(), poll_ns_.load(), recv_ns_.load(), engine_ns_.load(), lock_ns_.load()}; }
+    Stats GetStats() const {
+        return {rounds_.load(), wakes_.load(), poll_ns_.load(), recv_ns_.load(), engine_ns_.load(), lock_ns_.load(), wake_remakes_.load()};
+    }
 
 private:
     Runtime() = default;
@@ -186,6 +189,7 @@ private:
     // the out buffer; *wait_ms gets how long the loop may sleep.
     int Exchange(std::unique_lock<std::mutex> &lock, int engine_wait_ms, int *wait_ms);
     bool HandleSuspend(std::unique_lock<std::mutex> &lock);
+    void RepairWake();
     void LockForLoop(std::unique_lock<std::mutex> &lock);
 
     struct InternalScope {
@@ -221,6 +225,14 @@ private:
     bool suspended_ = false;
     bool resumed_ = true;  // tell the engine the network is up (also at start)
     int wake_rx_ = -1, wake_tx_ = -1;
+    // The console drops every socket when the network goes away without a
+    // sleep (Airplane Mode), the wake pair too: poll() then returns at once
+    // for it, every round. Set when the loop or Wake() finds it gone; the
+    // loop closes the pair and makes a new one, once a second at most
+    // (without one it polls without it: up to a second of latency).
+    std::atomic<bool> wake_gone_{false};
+    uint64_t wake_remake_at_ns_ = 0;  // 0: none due
+    uint64_t wake_made_ns_ = 0;       // when the pair was last made
     // True from when the loop decides to sleep in poll() until it is back.
     // A caller that leaves work for the engine while it is true sends one
     // wake-up and clears it, so a burst of calls costs one datagram.
@@ -256,7 +268,7 @@ private:
     OutFrame out_[kOutFrames];
     std::unique_ptr<uint8_t[]> out_buf_;
 
-    std::atomic<uint64_t> rounds_{0}, wakes_{0};
+    std::atomic<uint64_t> rounds_{0}, wakes_{0}, wake_remakes_{0};
     std::atomic<uint64_t> poll_ns_{0}, recv_ns_{0}, engine_ns_{0}, lock_ns_{0};
 };
 

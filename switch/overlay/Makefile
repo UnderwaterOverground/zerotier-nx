@@ -48,7 +48,8 @@ TARGET		:=	zerotier-nx
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
-INCLUDES	:=	include ../../third_party/libtesla/include ../../native/ctl ../../crates/ztnx-ffi/include
+INCLUDES	:=	include ../../third_party/libtesla/include ../../native/ctl ../../crates/ztnx-ffi/include \
+			../../third_party/Atmosphere/libraries/libvapours/include
 
 NO_ICON		:=  1
 

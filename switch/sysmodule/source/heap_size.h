@@ -1,4 +1,4 @@
 // The sysmodule's heap size, written by tools/footprint.sh (make sysmodule):
-// it fills the sysmodule's memory up to exactly 2272 KB with the code as
+// it fills the sysmodule's memory up to exactly 2560 KB with the code as
 // built. Commit it with the code change that moved it.
-#define ZTNX_HEAP_SIZE 0x100000
+#define ZTNX_HEAP_SIZE 0x12B000

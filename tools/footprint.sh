@@ -8,15 +8,16 @@
 # Exit 3: heap_size.h was rewritten; rebuild. Other: an error.
 set -eu
 cd "$(dirname "$0")/.."
-# 2388 KB, of which the heap is 1024 KB. The ceiling is 2560 KB (what the
-# sibling projects take). On a console the heap held 308 KB idle with one
+# 2560 KB, the same as the sibling projects (tailscale-nx, wireguard-nx), so
+# all three ask the same of a console; the heap takes whatever the code
+# leaves (1196 KB at 1.0.0). On a console the heap held 308 KB idle with one
 # network and peaked at 576 KB while joining from the stored config; apps'
 # sockets add up to overlay_budget_kb (320 by default, 384 at most), a
 # config update about 90 KB for a moment, each peer about 5 KB (at most 48
 # are remembered: about 220 KB on a network that large and busy). At 820 KB the
-# largest free block was down to 132 KB, so the heap is not squeezed to the
-# measured peak: lower the target by what a change saves elsewhere instead.
-target=$((0x255000))
+# largest free block was down to 132 KB, so the heap is never squeezed to the
+# measured peak: min_heap below is the floor.
+target=$((0x280000))
 min_heap=$((1024 * 1024))
 elf=switch/sysmodule/zerotier-nx.elf
 header=switch/sysmodule/source/heap_size.h

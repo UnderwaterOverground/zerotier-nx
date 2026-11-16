@@ -79,6 +79,11 @@ $(LIBSTRAT): $(ATMOSPHERE_PATCHES)
 	  git -C third_party/Atmosphere apply ../../$$p || exit 1; \
 	done
 	$(SW) make -C third_party/Atmosphere/libraries/libstratosphere -j8
+	@# Its precompiled header is built at -O2. Where GCC accepts it (a fresh
+	@# build; not when git describes the tree differently than when it was
+	@# made) the sysmodule's code from Atmosphère's headers is -O2 rather
+	@# than -Os, and ~25 KB larger. Remove it so every build is the same.
+	rm -rf third_party/Atmosphere/libraries/libstratosphere/include/stratosphere.hpp.gch
 
 # ZeroTier's core (third_party/ZeroTierOne/node) with our changes to it
 # (patches/zerotier-*.patch, applied to the submodule's working tree), built

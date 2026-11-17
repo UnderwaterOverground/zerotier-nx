@@ -305,6 +305,10 @@ int main() {
             CHECK(ztnx_driver_pollfds(d, fds, ZTNX_DRIVER_MAX_FDS) == 1);
             close(fds[0].fd);
         };
+        const auto polled = [&] {
+            pollfd fds[ZTNX_DRIVER_MAX_FDS] = {};
+            return ztnx_driver_pollfds(d, fds, ZTNX_DRIVER_MAX_FDS) == 1;
+        };
         const auto delivered = [&] {
             const char msg[] = "after reopen";
             CHECK(ztnx_driver_send(d, sin.sin_addr.s_addr, ntohs(sin.sin_port), msg, sizeof msg, 0) == 0);
@@ -317,6 +321,7 @@ int main() {
         drop();
         CHECK(ztnx_driver_send(d, sin.sin_addr.s_addr, ntohs(sin.sin_port), "x", 1, 0) == -1);
         CHECK(ztnx_driver_broken(d));
+        CHECK(!polled());  // until it's reopened: no spinning on it
         CHECK(ztnx_driver_reopen(d) == 0);
         CHECK(!ztnx_driver_broken(d) && ztnx_driver_udp_port(d) == port && ztnx_driver_reopens(d) == 1);
         CHECK(delivered());
@@ -327,7 +332,9 @@ int main() {
         CHECK(ztnx_driver_poll(d, fds, n, 100) >= 1);
         CHECK(ztnx_driver_recv(d, fds) == 0);
         CHECK(ztnx_driver_broken(d));
+        CHECK(!polled());
         CHECK(ztnx_driver_reopen(d) == 0 && ztnx_driver_udp_port(d) == port && ztnx_driver_reopens(d) == 2);
+        CHECK(polled());
         CHECK(delivered());
         // An explicit suspend is not a broken socket.
         ztnx_driver_suspend(d);

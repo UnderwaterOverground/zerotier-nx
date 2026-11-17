@@ -385,7 +385,10 @@ static int stage(ZtnxDriver *d) {
 int ztnx_driver_pollfds(ZtnxDriver *d, struct pollfd *fds, int cap) {
     int n = 0;
     d->poll_udp = -1;
-    if (d->udp_fd >= 0 && n < cap) {
+    // A broken socket (dropped by the system) is left out until it is
+    // reopened: poll() would report it at once, every round, and the loop
+    // would spin until the reopen (at most once a second).
+    if (d->udp_fd >= 0 && !d->broken && n < cap) {
         d->poll_udp = n;
         fds[n].fd = d->udp_fd;
         fds[n].events = POLLIN;

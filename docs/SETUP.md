@@ -244,8 +244,10 @@ ZeroTier on a computer does. Ordinary networks are far inside these limits:
   and the overlay says so. If it has more rules, its traffic is blocked,
   and the overlay says that too.
 - 48 devices in contact at once. Past that, the one heard from longest ago
-  makes room, and is found again when it's needed. The Devices page lists
-  the first 32.
+  makes room, and is found again when it's needed, so more than 48 devices
+  talking to the Switch at the same time get slow and unreliable
+  connections (fine for a network that big where only a few talk to it).
+  The Devices page lists the first 32.
 - One network, IPv4 only. IPv6 addresses (including 6PLANE and RFC 4193)
   aren't used, and neither is the network's DNS setting.
 - Networks that need single sign-on (SSO) can't be joined.

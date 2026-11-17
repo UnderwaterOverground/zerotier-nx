@@ -142,16 +142,18 @@ Moonlight sends 1392-byte video packets to hosts at private addresses and
 1024-byte packets to everything else (`moonlight-common-c`,
 `Connection.c`). ZeroTier carries at most about 1394 bytes of a UDP packet
 in one physical datagram (1432 bytes of payload), so every 1392-byte video
-packet is split in two and the console receives twice the datagrams. Its
-socket service is the limit (it runs on one core); measured at 720p:
+packet is split in two and the console receives twice the datagrams. The
+limit is reading them: the engine thread spends about 220 us per datagram
+in `bsdRecvMMsg` (the console's socket service) against about 15 us in
+ZeroTier, so it tops out near 3,900 datagrams a second (`loop: busy` goes
+from 75% at 25 Mbit/s to 95% when a stream collapses). Measured at 720p:
 
-| Host address (video packet size) | Clean | Marginal | Collapsed |
+| Host (video packet size) | Clean | Marginal | Collapsed |
 |---|---|---|---|
-| ZeroTier address (1392 B) | 20 Mbit/s | 25 Mbit/s | 30 Mbit/s |
-| `100.127.x.y` (1024 B) | 30 Mbit/s | | 35 Mbit/s |
+| By ZeroTier address (1392 B) | 20 Mbit/s | 25 Mbit/s | 30 Mbit/s |
+| By name, through a stand-in (1024 B) | 25 Mbit/s | 28 Mbit/s | 30 Mbit/s |
 
-The README's figures leave a margin below these single runs. That's why
-named hosts resolve to stand-ins in `100.127.0.0/16`
+That's why named hosts resolve to stand-ins in `100.127.0.0/16`
 (`VSock::SetAliases`, `hosts.cpp`). For comparison, the same console with
 no MITM at all, on its LAN, is flat at 31 Mbit/s and collapses from 33.
 

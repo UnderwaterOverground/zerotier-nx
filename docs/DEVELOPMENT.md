@@ -222,6 +222,11 @@ the library.
   128 rules and 48 peers; a network that has more is truncated and says so
   (patch 0006). A network with more rules than that has its traffic
   blocked instead.
+- **The MITM never allocates what an app asks for without a bound.** Its
+  threads serve every app's socket calls, and a failed allocation there
+  takes the sysmodule down. `recvmmsg` receives straight into the app's
+  buffer, and a `poll()` of more than 256 entries goes to the console's own
+  service.
 - **C++ exceptions must work.** ZeroTier's core throws on malformed
   packets and catches at its entry points. `zt-selftest` (and the
   sysmodule's first log lines) check that a throw is caught.
@@ -234,10 +239,12 @@ the library.
   same for a console) rather than 9993, so it can't clash with a computer
   on the same Wi-Fi using ZeroTier's usual port.
 - **The console drops every socket when the network goes away without a
-  sleep** (Airplane Mode, a lost access point): sends fail with EPIPE and
-  `poll()` reports the socket invalid at once. The driver reopens its UDP
-  socket on the same port, and the runtime remakes its wake pair; both at
-  most once a second. A sleep closes and reopens everything anyway.
+  sleep** (Airplane Mode, a lost access point): sends fail with EPIPE, and
+  `poll()` reports the socket invalid, or, for several seconds first, ready
+  with nothing to read. The driver treats an error, or 64 rounds of ready
+  but empty in a row, as a dropped socket and reopens it on the same port;
+  the runtime remakes its wake pair. Both happen at most once a second. A
+  sleep closes and reopens everything anyway.
 - **Consoles often have wrong clocks** (HATS-style DNS blocklists block
   Nintendo NTP; one test console was at 2053), which breaks TLS. The
   sysmodule falls back to github.com's HTTP `Date` for the update check

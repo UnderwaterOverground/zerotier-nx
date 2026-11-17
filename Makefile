@@ -18,7 +18,7 @@ else
   SW := docker run --rm -v "$(CURDIR)":/src -v ztnx-cargo-registry:/opt/cargo/registry -e CARGO_TARGET_DIR=/src/target/switch -w /src $(DOCKER_IMAGE)
 endif
 
-.PHONY: publish release overlay mitm-test nxlink-mitm-test speedtest nxlink-speedtest all host-test host-c e2e sysmodule libstratosphere docker-image rust-switch nro nxlink clean
+.PHONY: publish release overlay mitm-test nxlink-mitm-test speedtest nxlink-speedtest all host-test host-c e2e sysmodule libstratosphere docker-image rust-switch clean
 
 all: host-test
 
@@ -61,12 +61,6 @@ docker-image:
 rust-switch:
 	$(SW) env RUSTFLAGS="$(RUST_SWITCH_RUSTFLAGS)" cargo build -p ztnx-ffi $(RUST_SWITCH_FLAGS)
 
-nro: rust-switch
-	$(SW) make -C switch/app ZTNX_BUILD_UNIX=$(BUILD_UNIX)
-
-# Send the NRO to hbmenu's netloader (press Y on the console first) and stream
-# its stdout back. NXLINK_HOST is the console's IP; broadcast discovery does not
-# work from inside Docker Desktop.
 # Atmosphère's libstratosphere (pinned to the console's Atmosphère, 1.12.2).
 LIBSTRAT := third_party/Atmosphere/libraries/libstratosphere/lib/nintendo_nx_arm64_armv8a/release/libstratosphere.a
 # Fixes to Atmosphère's libraries that zerotier-nx needs (see patches/),
@@ -124,7 +118,7 @@ publish:
 release:
 	tools/package-release.sh
 
-# Tesla/Ultrahand overlay: status, on/off and login QR (switch/overlay).
+# Tesla/Ultrahand overlay: status, devices, pause, stop and start (switch/overlay).
 overlay:
 	$(SW) make -C switch/overlay
 
@@ -149,12 +143,10 @@ nxlink-speedtest: speedtest target/nxlink
 	@test -n "$(NXLINK_HOST)" -a -n "$(SPEEDTEST_SERVERS)" || (echo "set NXLINK_HOST=<switch ip> SPEEDTEST_SERVERS=\"<lan ip> <zerotier ip>\"" && false)
 	script -q target/nxlink-speedtest.log target/nxlink -a $(NXLINK_HOST) -s switch/speedtest/speedtest.nro $(SPEEDTEST_ARGS) $(SPEEDTEST_SERVERS)
 
-nxlink: nro target/nxlink
-	@test -n "$(NXLINK_HOST)" || (echo "set NXLINK_HOST=<switch ip>" && false)
-	# `script` gives nxlink a pty so the console's log streams line by line
-	# (also into target/nxlink.log).
-	script -q target/nxlink.log target/nxlink -a $(NXLINK_HOST) -s switch/app/ztnx-app.nro
-
+# The nxlink-* targets send an NRO to hbmenu's netloader (press Y on the
+# console first) and stream its stdout back; `script` gives nxlink a pty so
+# it streams line by line. NXLINK_HOST is the console's IP: broadcast
+# discovery does not work from inside Docker Desktop.
 # nxlink built natively (switchbrew/switch-tools): the console has to connect
 # back for stdout, which is simplest without Docker's port mapping.
 target/nxlink:
@@ -163,7 +155,6 @@ target/nxlink:
 
 clean:
 	cargo clean
-	$(SW) make -C switch/app ZTNX_BUILD_UNIX=$(BUILD_UNIX) clean
 
 # Interpose shim (run unmodified programs through the socket virtualization
 # layer) and its test client, for macOS.

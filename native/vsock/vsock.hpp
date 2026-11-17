@@ -3,8 +3,8 @@
 //
 // Every socket is created for real, so fd numbers stay unique and plain
 // traffic is untouched. A socket becomes (partly) virtual when it is
-// connected/sent to a tunnel address (our own, or inside a peer's
-// AllowedIPs: IsTunnel), bound to a tunnel address, or bound to the wildcard
+// connected/sent to a tunnel address (our own, or inside the network's
+// subnets and managed routes: IsTunnel), bound to a tunnel address, or bound to the wildcard
 // address (then it is reachable from both sides: a "dual" socket). Virtual
 // traffic goes through the ztnx engine's overlay sockets.
 //
@@ -106,7 +106,7 @@ public:
     // buffers for the many sockets that never do. Default: right away.
     void SetEagerDualUdp(bool eager) { eager_dual_udp_ = eager; }
     // Whether addr goes through the tunnel: inside one of the routes
-    // (SetRoutes: our own addresses and every peer's AllowedIPs), except
+    // (SetRoutes: our own subnets and the network's managed routes), except
     // addresses on our own LAN (SetLocalNet), which are reached directly as
     // with any on-link route, and special ones (loopback, link-local,
     // multicast, broadcast), which a 0.0.0.0/0 route would otherwise take.

@@ -1,5 +1,5 @@
-// bsd:u MITM: homebrew sockets that talk to tunnel addresses (our own and
-// the peers' AllowedIPs, see VSock::IsTunnel) are served by the ztnx engine's
+// bsd:u MITM: homebrew sockets that talk to tunnel addresses (the ZeroTier
+// network's subnets and managed routes, see VSock::IsTunnel) are served by the ztnx engine's
 // overlay sockets via the portable socket-virtualization layer (native/vsock);
 // everything else is forwarded to the real bsd:u untouched.
 #pragma once

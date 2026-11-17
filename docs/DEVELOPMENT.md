@@ -7,74 +7,63 @@ machine, without a console), and what we learned along the way.
 
 | Path | What |
 |---|---|
-| `crates/ztnx-core` | Sans-IO engine, `no_std + alloc`. It contains: <ul><li>the wg-quick `.conf` parser (`config.rs`)</li><li>WireGuard via vendored `ts_tunnel`, plus what it leaves to us: AllowedIPs routing, endpoints and roaming, keepalives, the 15 s re-handshake rule, statistics (`engine/`)</li><li>smoltcp netstack with a socket API</li><li>a pure-Rust rustls provider (for the update check)</li></ul> It never touches sockets, clocks or OS RNGs; drivers inject them. |
+| `third_party/ZeroTierOne` | ZeroTier 1.16.2 (submodule). Only its core (`node/`, `include/`) is built in, with the changes in `patches/zerotier-*.patch` (listed in `VENDORED.md`): no threads, a member-only node, smaller limits, a bounded peer table, and an identity made in borrowed memory. |
+| `native/zt` | The glue around ZeroTier's core (`ztnx_engine.cpp`): one node, one network, state files, the network config turned into a plain struct, frames in and out. Its `Makefile` builds the core for the Switch and for the host. |
+| `crates/ztnx-core` | Sans-IO Rust, `no_std + alloc`: the smoltcp TCP/IP stack that homebrew sockets are mapped onto, the Ethernet layer between it and ZeroTier (ARP, routes, MTU), and rustls with a pure-Rust provider for the update check. It never touches sockets, clocks or OS RNGs; drivers inject them. |
 | `crates/ztnx-ffi` | C ABI (`include/ztnx.h`), built as a staticlib for the Switch and for host C tests |
-| `crates/ztnx-host` | Rust host driver: `up --conf`, `check`, `genkey`, `selftest`, `tls-probe` |
-| `native/driver` | Portable POSIX C driver loop (one UDP socket) plus shared app logic (clock check, echo test, update check). The same code runs on macOS and libnx. |
-| `native/host` | `ztnx-c`, a host CLI over the C driver, to test the Switch code paths on the Mac (including suspend/resume) |
-| `native/runtime` | C++ runtime: runs the engine on its own thread for multi-threaded callers |
-| `native/vsock` | Socket virtualization. It decides per socket between the real stack and the tunnel (`IsTunnel`: our addresses and every peer's AllowedIPs, minus the local network), splits poll/select, and handles blocking semantics. The MITM is built on it. |
+| `native/driver` | Portable POSIX C: the UDP socket ZeroTier uses (batched receive on the console, reopened when the system drops it), DNS, the clock check and the update check. The same code runs on macOS, Linux and libnx. |
+| `native/runtime` | C++ runtime: runs ZeroTier and the stack on one engine thread, carries frames between them, and lets other threads use sockets (pause, sleep and wake included) |
+| `native/vsock` | Socket virtualization. It decides per socket between the real stack and the network (`IsTunnel`: the network's subnets and managed routes, minus the local network), splits poll/select, and handles blocking semantics. The MITM is built on it. |
 | `native/interpose` | `libztnx_interpose`: runs unmodified programs through `native/vsock` (DYLD on macOS, LD_PRELOAD on Linux), plus `vsock-test` |
-| `switch/sysmodule` | The boot2 sysmodule (libstratosphere): engine, `bsd:u` MITM (plus `bsd:s` for sys-ftpd), the hosts file for peer names, the `ztnx:ctl` status service, sleep handling and the crash guard |
-| `switch/overlay` | Tesla/Ultrahand overlay: status, pause switch, stop/start, peers with details, config picker |
-| `switch/app` | `ztnx-app.nro`: the engine in a homebrew app, with status, an echo self-test and a crypto benchmark (developer tool) |
+| `native/host` | Host tools and tests: `ztnx-c` (the sysmodule's parts without the MITM), `zt-smoke` (everything on one thread), `zt-selftest`, `runtime-test`, `routes-test` |
+| `native/ctl` | The `ztnx:ctl` status service's types, shared by the sysmodule and the overlay |
+| `switch/sysmodule` | The boot2 sysmodule (libstratosphere): ZeroTier, the `bsd:u` MITM (plus `bsd:s` for sys-ftpd), the hosts file for names, the status service, sleep handling and the crash guard |
+| `switch/overlay` | Tesla/Ultrahand overlay: status, devices with details, network, pause, stop/start |
+| `switch/mitm-test` | `mitm-test.nro`: the socket virtualization suite as plain homebrew, through the sysmodule's MITM (developer tool) |
 | `switch/speedtest` | `speedtest.nro`: throughput, socket call costs and SD card writes through the sysmodule, against `tools/speedtest-server.py` (developer tool) |
-| `third_party/tailscale-rs` | Vendored, `no_std`-ported crates from tailscale-rs (BSD-3): `ts_tunnel`, `ts_noise`, `ts_keys`, `ts_packet`, `ts_time`, `ts_util`. See `VENDORED.md`. |
-| `e2e/` | Two stock WireGuard peers (the Docker VM's kernel WireGuard through `wg-quick`) with TCP/UDP echo (port 7), HTTP (8080) and iperf3 (5201), plus an AmneziaWG peer (amneziawg-go built from source) with a plain and a header-protected interface. `run-tests.sh` is the automated suite. |
+| `e2e/` | A ZeroTier network in Docker: a self-hosted controller, a stock `zerotier-one` peer (TCP/UDP echo on port 7, HTTP on 8080, iperf3 on 5201) and a client container that runs our Linux builds. `run-tests.sh` is the automated suite. |
 
 ## Build and test
 
-Requirements: Rust (stable for the host, nightly is pulled into the Docker image) and Docker.
+Requirements: Rust (stable for the host; nightly is pulled into the Docker
+image) and Docker. Check out the submodules first
+(`git submodule update --init`).
 
 ```sh
-make host-test        # unit tests: crypto vectors, the .conf parser, two engines handshaking, netstack
+make host-test        # unit tests: the stack, ARP and routes, TLS; ZeroTier's
+                      # exceptions; the runtime against a fake engine; routes
 make docker-image     # once: devkitA64 + libnx + Rust nightly (native arm64)
 make sysmodule        # switch/sysmodule/dist: atmosphere/contents/4200000000005A54 (exefs.nsp, boot2 flag)
 make overlay          # switch/overlay/zerotier-nx.ovl
 tools/stage-sd.sh     # dist/sd: a ready-to-copy SD tree (Atmosphère, hekate, sysmodule, overlay)
-make nro              # switch/app/ztnx-app.nro
-make host-c           # target/ztnx-c (C driver + FFI on the Mac)
+make host-c           # target/ztnx-c (the sysmodule's parts on the Mac)
 make interpose        # target/libztnx_interpose.dylib + target/vsock-test
-make routes-test      # the socket layer's tunnel-address rules
-make runtime-test     # the runtime's non-blocking pause and resume (links the shim)
-make e2e              # local WireGuard peers + the full end-to-end suite (Docker)
+make e2e              # the Docker network + the end-to-end suite
 ```
 
-`make e2e` checks the following against the kernel WireGuard in Docker's VM:
-- TCP/UDP echo after a handshake; handshake retries after 20 s of packet loss
-- inbound ICMP; PersistentKeepalive traffic while idle
+`make sysmodule` builds libstratosphere once (a few minutes) and applies
+the patches in `patches/` to the submodules' working trees first, so
+`git status` shows them as modified; that's expected. Never commit inside
+the submodules.
+
+### The test network (no console needed)
+
+`make e2e` (or `e2e/setup.sh`, then `e2e/run-tests.sh`) brings up the
+controller, the peer and the client, makes a private network
+(10.147.17.0/24), joins and authorizes the peer, builds our Linux tools
+in the client, and checks:
+- a new identity; an unauthorized node told so; an address once authorized
+- UDP echo of 2000 bytes (two ZeroTier packets each way); ping and a
+  1300-byte ping from the peer; 300 KB of TCP echo from the peer
+- the runtime's own tests; TCP and UDP echo from another thread; suspend
+  closing the socket within 2.5 s, and echo again after resume
 - the socket virtualization suite and unmodified curl through the shim
-- a 50 Mbit/s UDP stream (Moonlight-like) and a TCP bulk upload through the shim
-- inbound listeners reachable (no access rules); a subnet reached only when AllowedIPs has it
-- pre-shared keys (and a wrong one refused); an `Endpoint` host name that only resolves later
-- roaming to a new port; several peers; an endpoint-less peer contacted by the server
-- a broken `.conf` reported with its line, with the shim staying out of the way
-- `ztnx-c --sleep-test`: echo again right after suspend/resume (the console's wake path)
-- AmneziaWG: echo and handshake against amneziawg-go with junk, padding and disguised headers; the same keys without them refused
-- AmneziaWG 3 header protection: echo, handshake and the UDP/TCP throughput tests through it; the same parameters without the key refused
+- a burst of 60 fragmented datagrams; iperf3 TCP (at least 50 Mbit/s) and
+  20 Mbit/s of UDP to the peer
 
-Typical results on a Mac's Docker VM: 50 Mbit/s UDP at 0% loss; about 590 Mbit/s TCP up.
-
-### Local peers (no console needed)
-
-```sh
-e2e/setup.sh          # WireGuard peers (10.7.0.1, 10.7.0.9), an AmneziaWG peer (10.7.1.1) and client .conf files in e2e/state/
-# Rust driver (host side; the peers are only reachable from the compose network):
-cd e2e && docker compose run --rm ztnx up --conf /state/client.conf --echo-test 10.7.0.1 --expect-handshake
-# C driver (what the Switch runs):
-docker compose run --rm --entrypoint /src/target/linux/ztnx-c ztnx --conf /state/client.conf --echo-test 10.7.0.1
-e2e/down.sh           # tear down and delete state
-```
-
-On the Mac itself, two engines can talk through real sockets: make two
-confs with `ztnx-host genkey`, run `ztnx-host up --conf b.conf` (with a
-`ListenPort`) and `ztnx-host up --conf a.conf --expect-handshake`.
-
-The AmneziaWG peer's ports are published on the host (UDP 51821 for `awg0`,
-51822 for the header-protected `awg1`), so a console on the same network can
-test against it: copy `e2e/state/awgswitch.conf` or `awghpswitch.conf` to
-the SD card (its `Endpoint` is this machine's address; set `ZTNX_LAN_IP`
-before `setup.sh` if it guessed wrong).
+The nodes meet through ZeroTier's root servers, so the suite needs the
+internet. `e2e/ctl.sh` drives the controller (make networks, authorize
+members, change routes); `e2e/down.sh` tears it all down.
 
 The sysmodule's boot-time update check (`native/driver/ztnx_update.c`) runs
 the same way against the real GitHub. Pass the version to compare with:
@@ -83,17 +72,13 @@ the same way against the real GitHub. Pass the version to compare with:
 target/ztnx-c --update-check 1.0.0
 ```
 
-### Running unmodified programs through the tunnel (the MITM's code paths)
+### Running unmodified programs through the network (the MITM's code paths)
 
-```sh
-ZTNX_CONF=e2e/state/preload.conf ZTNX_WAIT_READY=1 \
-DYLD_INSERT_LIBRARIES=target/libztnx_interpose.dylib target/vsock-test 10.7.0.1 1.1.1.1:443 10.7.0.3
-```
-
-`ZTNX_TRACE=1` logs every intercepted socket call. `ZTNX_LOG_LEVEL=1..5` shows
-the core's logs. SIP-protected binaries (`/usr/bin/curl`) ignore
-`DYLD_INSERT_LIBRARIES`; use the Linux container for those (`e2e/run-tests.sh`
-shows how).
+`e2e/run-tests.sh` shows how: inside the client container, with
+`LD_PRELOAD=/out/libztnx_interpose.so`, `ZTNX_STATE=<state dir>`,
+`ZTNX_NWID=<network id>` and `ZTNX_WAIT_READY=1`, any program's sockets to
+the network's addresses go through ZeroTier. `ZTNX_TRACE=1` logs every
+intercepted socket call.
 
 ### On the console
 
@@ -107,78 +92,75 @@ Sysmodule loop (a console with sys-ftpd, reachable at `<switch ip>`):
    while any is open). The Sysmodules overlay must never kill it.
 3. Watch the log: set `log_udp=<your ip>:5514` in
    `config/zerotier-nx/config.ini` and listen with a small UDP socket, or
-   read `config/zerotier-nx/sysmodule.log(.1)`.
+   read `config/zerotier-nx/sysmodule.log(.1)` (the current one can't be
+   read over FTP while the sysmodule runs).
 
 Crashes are logged with module-relative offsets (`CRASH desc ... pc +0x...`);
 resolve them with `aarch64-none-elf-addr2line -e switch/sysmodule/zerotier-nx.elf`.
 
-`switch/app` (`ztnx-app.nro`) runs the same engine as an ordinary homebrew
-app with an echo self-test and a crypto benchmark (`make nxlink
-NXLINK_HOST=<switch ip>` streams its output). Don't run it alongside the
-sysmodule with the same `.conf`: the server would see one key from two
-places.
+The log's once-a-minute lines are the first place to look:
+`heap:` (use and peak of the fixed heap), `zerotier: datagrams in/out`,
+`loop: busy N%` (the engine thread's time outside `poll()`: near 100% means
+it, not the network, limits throughput; about 50% with nothing in the other
+columns means `poll()` is returning at once, i.e. a socket is in an error
+state) and `stacks used:`.
+
+`switch/mitm-test` (`make nxlink-mitm-test NXLINK_HOST=<switch ip>
+MITM_PEER=<a peer's ZeroTier ip>`) runs the socket suite through the MITM
+against TCP and UDP echo on port 7 of a device on the network
+(`tools/echo-server.py`, or the e2e peer).
 
 `switch/speedtest` (`speedtest.nro`) measures what homebrew gets through
 the sysmodule: TCP and UDP throughput each way, the cost of single socket
-calls, SD card write speed and the crypto benchmark. Run
-`tools/speedtest-server.py` (port 5300, Python 3) on a wired machine that is
-also a peer, then give the test both of its addresses, so each result has a
-LAN baseline next to it:
+calls and SD card write speed. Run `tools/speedtest-server.py` (port 5300,
+Python 3) on a wired machine that is also on the network, then give the
+test both of its addresses, so each result has a LAN baseline next to it:
 
 ```sh
-make nxlink-speedtest NXLINK_HOST=<switch ip> SPEEDTEST_SERVERS="<lan ip> <tunnel ip>"
-# only some tests: SPEEDTEST_ARGS=+sc (b crypto, s SD card, c call costs, t TCP, u UDP)
+make nxlink-speedtest NXLINK_HOST=<switch ip> SPEEDTEST_SERVERS="<lan ip> <zerotier ip>"
+# only some tests: SPEEDTEST_ARGS=+sc (s SD card, c call costs, t TCP, u UDP)
 ```
-
-Results (handheld on Wi-Fi, server on 2.5 GbE, Unraid's kernel WireGuard):
-on the LAN, TCP about 44 Mbit/s down and 54 up, and UDP without loss up to
-30 Mbit/s down and 50 up. Through the tunnel, UDP without loss up to
-35 Mbit/s down (10% lost at 40) and about 38 up; TCP about 17 down and
-13 up. tailscale-nx 1.2.0 on the same console managed 35 down / 37 up UDP
-through its tunnel and about 13 TCP each way, so the data path (the same
-ChaCha20-Poly1305 in `ts_tunnel` and smoltcp, with a 1420-byte MTU instead
-of 1280) is on par.
 
 ### Moonlight stream test
 
 The bitrate limits in the README come from streaming the hardest picture
 there is for a video encoder, full-screen moving noise, from Sunshine to
-Artemis for two minutes per setting. Start the stream first, then the
-noise on the host, so it's on top of everything (Steam Big Picture covers
-noise started earlier):
+Artemis for a minute or two per setting, from a wired PC with a direct
+ZeroTier path to the console. Start the stream first, then the noise on
+the host, so it's on top of everything (Steam Big Picture covers noise
+started earlier):
 
 ```sh
 ffplay -f lavfi -i 'nullsrc=s=1920x1080:r=60,geq=random(1)*255:128:128' -fs
 ```
 
 A setting counts as safe when Artemis's **Performance** page (MINUS + PLUS
-during a stream) holds about 60 FPS and Sunshine's log, at
-`min_log_level = debug`, shows no more than an occasional
-`IDX_REQUEST_IDR_FRAME` (Moonlight asking for a fresh frame after a loss).
-Noise makes the encoder go over the set bitrate: 25 Mbit/s put about 26
-through the tunnel at 720p and 33 at 1080p.
+during a stream) holds about 60 FPS with no loss. Noise makes the encoder go
+over the set bitrate.
 
 Moonlight sends 1392-byte video packets to hosts at private addresses and
-1024-byte packets to everything else, including `100.64.0.0/10`
-(`moonlight-common-c`, `Connection.c`). With the 1420-byte tunnel MTU a
-1392-byte packet arrives as two fragments, so the Switch receives twice
-the datagrams. The limit is the console's socket service, which runs on
-core 3 and was 84 to 96% busy at the edge: about 3,300 to 4,000
-datagrams a second, however the sysmodule reads them. That's why peer
-names resolve to stand-ins in `100.127.0.0/16` (`VSock::SetAliases`,
-`hosts.cpp`). Moonlight's remote mode also takes 500 kbit/s off the
-video bitrate for audio and turns off DSCP marking, which a tunnel
-doesn't carry anyway. tailscale-nx 1.2.0 on the same console, with the
-PC at its `100.x` address, had the same limits as zerotier-nx by peer
-name.
+1024-byte packets to everything else (`moonlight-common-c`,
+`Connection.c`). ZeroTier carries at most about 1394 bytes of a UDP packet
+in one physical datagram (1432 bytes of payload), so every 1392-byte video
+packet is split in two and the console receives twice the datagrams. Its
+socket service is the limit (it runs on one core); measured at 720p:
+
+| Host address (video packet size) | Clean | Marginal | Collapsed |
+|---|---|---|---|
+| ZeroTier address (1392 B) | 20 Mbit/s | 25 Mbit/s | 30 Mbit/s |
+| `100.127.x.y` (1024 B) | 30 Mbit/s | | 35 Mbit/s |
+
+The README's figures leave a margin below these single runs. That's why
+named hosts resolve to stand-ins in `100.127.0.0/16`
+(`VSock::SetAliases`, `hosts.cpp`). For comparison, the same console with
+no MITM at all, on its LAN, is flat at 31 Mbit/s and collapses from 33.
 
 ### A complete SD card tree
 
 `tools/stage-sd.sh` stages `dist/sd/`: Atmosphère 1.12.0, hekate, the
-sysmodule, the overlay and the test app. It's handy for setting up a test
-console. Copy it with rsync, which merges folders. Finder's "Replace"
-deletes what's already in a folder, such as other sysmodules or
-`hekate_ipl.ini`:
+sysmodule and the overlay. It's handy for setting up a test console. Copy
+it with rsync, which merges folders. Finder's "Replace" deletes what's
+already in a folder, such as other sysmodules or `hekate_ipl.ini`:
 
 ```sh
 rsync -rtv --exclude .DS_Store dist/sd/ /Volumes/<SD card>/
@@ -188,8 +170,8 @@ dot_clean -m /Volumes/<SD card>
 ### Test-only settings
 
 - `tunnel_lan=on` in `config.ini` sends addresses on the console's own LAN
-  through the tunnel too when `AllowedIPs` covers them (normally they're
-  reached directly), to test a stream from a local host through the server.
+  over ZeroTier too when a route covers them (normally they're reached
+  directly), to test a stream from a local host through ZeroTier.
 
 ## Releases
 
@@ -210,39 +192,51 @@ firmware needs a release built with an Atmosphère that knows it.
 
 ## Memory
 
-The sysmodule takes exactly 2.5 MB (`tools/footprint.sh` sizes the heap to
-fill it; `heap_size.h` is committed with the code that moved it).
+The sysmodule takes exactly 2.5 MB, the same as tailscale-nx and
+wireguard-nx (`tools/footprint.sh` sizes the heap to fill it, about
+1.2 MB; `heap_size.h` is committed with the code that moved it).
 `tools/map-sizes.py switch/sysmodule/build/zerotier-nx.map` shows what the
-binary is made of. Compared with tailscale-nx 1.2.0, dropping the control
-plane, DERP, disco and Taildrop took the Rust code from 615 KB to 430 KB
-and grew the heap from 768 KB to 952 KB; rustls (the update check) is the
-largest remaining piece after WireGuard and the netstack.
+binary is made of. An idle network member uses about 320 KB of the heap,
+and a join peaks near 600 KB.
+
+The build must not pick up libstratosphere's precompiled header: it's
+built at -O2, and the sysmodule's code from Atmosphère's headers would come
+out about 25 KB larger than at -Os. GCC only uses it when every macro
+matches (including the git revision it was made at), so it was silently
+used by some builds and not others. The Makefile deletes it after building
+the library.
 
 ## Notes and findings
 
-- **`ts_tunnel` leaves endpoints, keepalives and routing to the caller.** The
-  engine keeps a current endpoint per peer (configured, resolved from a
-  name, or wherever its last authenticated packet came from: roaming works
-  in both roles), routes outbound packets by longest AllowedIPs prefix and
-  drops inbound ones whose source isn't in the peer's AllowedIPs
-  (cryptokey routing), and sends an empty packet as the keepalive. With a
-  live session that packet becomes a 32-byte keepalive; without one it
-  queues and `ts_tunnel` starts a handshake, so the same "kick" serves
-  PersistentKeepalive, first contact, reconnecting after a wake and the
-  15 s no-response rule.
-- **The engine adds WireGuard's "no response for 15 s, re-handshake" rule**,
-  which `ts_tunnel` lacks, and records the last handshake time (a small
-  `// ztnx:` patch to `ts_tunnel`).
-- **Host names in `Endpoint=`** are resolved by the driver on request
-  (`ZTNX_EVENT_RESOLVE`): at start, after the network changes, every 30 s
-  while there is no handshake and again when the last one is older than
-  135 s (wg-quick's reresolve-dns). On the console the lookup runs off the
-  runtime lock, between engine rounds, so it never stalls homebrew.
-- **A `.conf` can be swapped at runtime** (`ztnx_engine_reload`): the
-  netstack and its socket ids survive, sessions start over. A broken file
-  leaves what was running in place.
+- **One thread runs ZeroTier.** The core isn't thread-safe, and its send
+  path alone has a 64 KB stack frame, far more than the MITM's threads
+  have. Every ZeroTier and driver call happens on the engine thread
+  (`native/runtime`); other threads hand it work under a lock and wake it
+  through a loopback socket pair.
+- **ZeroTier's own threads are gone** (`ZT_NO_THREADS`), and so is
+  everything a plain member doesn't need (`ZT_LEAF_ONLY`: relaying for
+  others, multicast replication, the controller). Its limits are compiled
+  down (`-D` in `native/zt/Makefile`, patch 0002) to 16 routes, 8 addresses,
+  128 rules and 48 peers; a network that has more is truncated and says so
+  (patch 0006). A network with more rules than that has its traffic
+  blocked instead.
+- **C++ exceptions must work.** ZeroTier's core throws on malformed
+  packets and catches at its entry points. `zt-selftest` (and the
+  sysmodule's first log lines) check that a throw is caught.
+- **Making an identity needs 2 MB** of scratch memory (a memory-hard hash),
+  more than the whole heap. The sysmodule borrows it from the system once,
+  two minutes after power-on and only with 3 MB free, so it never competes
+  with the boot. With `ZT_NO_LOCAL_IDENTITY_VALIDATION` the node doesn't
+  re-check its own identity at each start (the same 2 MB).
+- **The UDP port is derived from the node's ID** (20000-65499, always the
+  same for a console) rather than 9993, so it can't clash with a computer
+  on the same Wi-Fi using ZeroTier's usual port.
+- **The console drops every socket when the network goes away without a
+  sleep** (Airplane Mode, a lost access point): sends fail with EPIPE and
+  `poll()` reports the socket invalid at once. The driver reopens its UDP
+  socket on the same port, and the runtime remakes its wake pair; both at
+  most once a second. A sleep closes and reopens everything anyway.
 - **Consoles often have wrong clocks** (HATS-style DNS blocklists block
-  Nintendo NTP; one test console was at 2053), which breaks TLS, and
-  WireGuard too: handshake timestamps must never go backwards for a key,
-  or the peer ignores the initiation as a replay. The sysmodule falls back
-  to github.com's HTTP `Date` (bounded to [build date, build date + 3 years]).
+  Nintendo NTP; one test console was at 2053), which breaks TLS. The
+  sysmodule falls back to github.com's HTTP `Date` for the update check
+  (bounded to [build date, build date + 3 years]).

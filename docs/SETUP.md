@@ -1,142 +1,119 @@
 # Setting up zerotier-nx
 
-zerotier-nx connects a modded Switch to your own
-[WireGuard](https://www.wireguard.com) server. It runs in the background
-from boot. Homebrew such as Moonlight can then reach your PC and home network
-through the tunnel, from anywhere.
+zerotier-nx puts a modded Switch on your [ZeroTier](https://www.zerotier.com)
+network. It runs in the background from boot. Homebrew such as Moonlight can
+then reach your PC and the other devices on the network, from anywhere,
+without port forwarding.
 
 It affects **homebrew only** (apps launched from hbmenu or another homebrew
 launcher, and home-screen forwarders). Games and Nintendo's own apps never
-see the tunnel.
+see the network.
 
 ## What you need
 
-- **Atmosphère**: tested with 1.12.0 on firmware 22.5.0. To set it up, follow
-  the [NH Switch Guide](https://switch.hacks.guide/).
+- **Atmosphère**: tested with 1.12.2 on firmware 22.5.0. To set it up,
+  follow the [NH Switch Guide](https://switch.hacks.guide/).
 - **[Ultrahand Overlay](https://github.com/ppkantorski/Ultrahand-Overlay)**
-  with nx-ovlloader. It is optional, but you need it for the status screen,
-  the peer list, the config picker and the notifications.
-- A **WireGuard server** you can add a peer to (see below).
+  with nx-ovlloader. It is optional, but you need it to see the Switch's
+  ZeroTier ID easily, and for the status screen, the device list and the
+  notifications.
+- A **ZeroTier network**: make one at [my.zerotier.com](https://my.zerotier.com)
+  (free), or on a controller of your own. Install ZeroTier on the devices
+  the Switch should reach (your PC, say) and join them to it.
 
 ## Install
 
-The [README](../README.md#installation) walks through it step by step, including
-how to copy the files on Windows and on a Mac. In short, copy these to the SD
-card, adding them to the folders already there:
+The [README](../README.md#installation) walks through it step by step,
+including how to copy the files on Windows and on a Mac. In short, copy these
+to the SD card, adding them to the folders already there:
 
 | Path | What |
 |---|---|
 | `atmosphere/contents/4200000000005A54/` | The sysmodule. `flags/boot2.flag` makes it start at boot. |
-| `switch/.overlays/zerotier-nx.ovl` | The overlay: status, peers, a pause switch, config picker, stop and start |
-| `config/zerotier-nx/config.ini.example` | Settings template (optional; see below) |
-| `config/zerotier-nx/<name>.conf` | Your tunnel configuration, from your server (see below) |
+| `switch/.overlays/zerotier-nx.ovl` | The overlay: status, this Switch's ID, devices, a pause switch, stop and start |
+| `config/zerotier-nx/config.ini.example` | Settings template: copy it to `config.ini` and set `network=` |
 
 Then restart the console.
 
-## The configuration file
+## Joining the network
 
-zerotier-nx reads the same `[Interface]` / `[Peer]` file as `wg-quick` and
-every WireGuard app. Your server makes one when you add a peer for the
-Switch; save it in `config/zerotier-nx` on the SD card. Any name ending
-`.conf` works; with several, pick one under **Config** in the overlay.
+Two things are needed: the Switch must know which network to join, and the
+network must let the Switch in.
 
-The `PrivateKey` line is the Switch's private key. Your server makes it
-along with the matching public key when you add the peer, keeps the public
-one, and puts the private one in the file it gives you. Copy the file as it
-is; there's nothing to make on the Switch.
+1. **The network ID.** Copy `config/zerotier-nx/config.ini.example` to
+   `config.ini` in the same folder, and set `network=` to the network's
+   16-character ID (on the network's page at my.zerotier.com). Only that
+   line is needed. Restart.
+2. **Authorize the Switch.** Networks are private by default: a new member
+   waits until it's authorized. The overlay shows **Authorize** with the
+   Switch's 10-character ZeroTier ID. At my.zerotier.com, open the network,
+   find that ID under **Members** and authorize it; on your own controller,
+   authorize it there (`zerotier-cli` or the controller's web interface).
+   The Switch notices within a few seconds and shows **Connected** with its
+   address. Giving it a name in the member list helps you find it later.
 
-```ini
-[Interface]
-PrivateKey = <the Switch's private key>
-Address = 10.253.0.2/32
+The address comes from the network's settings, like any member's. To keep
+it the same (handy for the devices that connect to the Switch), assign one
+in the member list.
 
-[Peer]
-# Name = gaming-pc
-PublicKey = <the server's public key>
-PresharedKey = <optional>
-AllowedIPs = 10.253.0.1/32, 192.168.1.0/24
-Endpoint = home.example.com:51820
-PersistentKeepalive = 25
-```
+### The Switch's identity
 
-- **`AllowedIPs`** is what the Switch reaches through the tunnel: the
-  server's tunnel address, plus your home network if the server routes it.
-  `0.0.0.0/0` sends all of homebrew's internet traffic through the server
-  (fine, but slower, and your server sees it all).
-- **`Endpoint`** is the server as seen from the internet: a host name
-  (dynamic DNS is fine; it's looked up again when the tunnel goes quiet)
-  or an address, and the UDP port forwarded to it.
-- **`PersistentKeepalive = 25`** keeps NAT mappings alive. Add it if your
-  server's file doesn't have it.
-- **`# Name = gaming-pc`** under a `[Peer]` names it (the overlay, and the
-  hosts file, so Moonlight can use the name). Unraid's `#Tower` style and
-  wg-easy's `### Client: name` are understood too. Names are lowercased and
-  spaces become `-`.
-- `DNS`, `MTU`, `ListenPort` and the `PostUp`-style lines of wg-quick are
-  accepted; `DNS` and the scripts are ignored. Several `[Peer]` sections
-  work, as do IPv6 addresses inside the tunnel.
+Every ZeroTier device has an identity: its 10-character ID and the keys
+that go with it. zerotier-nx makes the Switch's at the first boot and keeps
+it in `config/zerotier-nx/identity.secret` (and `identity.public`).
 
-### On common servers
+- Making one borrows 2 MB of memory for a few seconds, so zerotier-nx waits
+  until the console has finished starting up: about two minutes after
+  power-on, and until 3 MB is free. The overlay shows the ID once it's
+  there.
+- If the console never has 3 MB free, the overlay says so. Turn off a
+  sysmodule you don't need, or make an identity on a computer with ZeroTier
+  installed and copy it over:
 
-- **Unraid (VPN Manager):** Settings → VPN Manager, add a peer with
-  "Remote access to LAN" (so the Switch reaches your network), Apply, then
-  download its config or scan nothing: copy the text from "Peer
-  configuration". Set the tunnel active.
-- **wg-easy:** add a client, download its `.conf`.
-- **UniFi, Fritz!Box, MikroTik, OPNsense (Peer generator):** each has a
-  WireGuard page where you add a peer and download or copy its
-  configuration.
-- **pfSense, Linux with `wg`:** these want the Switch's public key, so make
-  the keys yourself (below).
+  ```sh
+  zerotier-idtool generate identity.secret identity.public
+  ```
 
-### Making the keys yourself
-
-Some servers only take the Switch's public key. Make a key pair on any
-computer, then write the Switch's file from the example above:
-
-- **With `wg`** (Linux, or macOS with `brew install wireguard-tools`):
-  `wg genkey | tee switch.key | wg pubkey > switch.pub`. `switch.key` is
-  the private key for the Switch's file; `switch.pub` goes to the server.
-- **With the WireGuard app** (Windows, macOS): **Add empty tunnel**. It
-  shows a new private key in the text and the public key above it. Copy
-  both, then delete the tunnel.
-
-Give the server the public key, with `AllowedIPs` set to the Switch's
-tunnel address (e.g. `10.253.0.2/32`).
-
-Treat the `.conf` like a password: it contains the Switch's private key,
-and anyone with it can join your network as the Switch.
+  Copy both files to `config/zerotier-nx` and restart.
+- The identity is the Switch's membership. Keep `identity.secret` private,
+  and don't copy it to a second console: two devices with one ID take turns
+  dropping each other off the network. Deleting it gives the Switch a new ID
+  at the next boot, which then needs authorizing again.
 
 ## Using it
 
-- **Moonlight:** add your PC by its peer name (e.g. `gaming-pc`) or by an
-  address the tunnel reaches. At home, Moonlight may also find the PC on
-  the local network and use that, which is fine. Away from home, it uses the
-  tunnel.
-- **Peer names:** names from the `.conf` are written into the hosts file
-  Atmosphère is using (`atmosphere/hosts/emummc.txt`, `sysmmc.txt` or
-  `default.txt`), pointing at each peer's first `/32` in `AllowedIPs`.
-  - A private address (`10.x`, `172.16.x` to `172.31.x`, `192.168.x`) is
-    written as a stand-in in `100.127.0.0/16` with the same last two
-    numbers (`10.253.0.1` becomes `100.127.0.1`), so Moonlight sends video
-    packets that fit the tunnel (see the
-    [README](../README.md#moonlight)). Homebrew reaching the
+- **Moonlight:** add your PC by a name (below) rather than its ZeroTier
+  address. At home, Moonlight may also find the PC on the local network and
+  use that, which is fine. Away from home, it goes over ZeroTier.
+- **Names:** ZeroTier itself has no device names, so name the devices you
+  use in `config.ini`, one line each:
+
+  ```ini
+  host = gaming-pc 10.147.17.5
+  host = nas 192.168.1.20
+  ```
+
+  The address can be a member's ZeroTier address or any address the
+  network routes to (see [Routes and your own network](#routes-and-your-own-network)).
+  The names are written into the hosts file Atmosphère is using
+  (`atmosphere/hosts/emummc.txt`, `sysmmc.txt` or `default.txt`), so every
+  homebrew app can use them.
+  - A private address (`10.x`, `172.16.x` to `172.31.x`, `192.168.x`, which
+    is where ZeroTier networks usually are) is written as a stand-in in
+    `100.127.0.0/16` with the same last two numbers (`10.147.17.5` becomes
+    `100.127.17.5`), so Moonlight sends video packets that fit one ZeroTier
+    packet (see the [README](../README.md#moonlight)). Homebrew reaching the
     stand-in reaches the real address, and sees the stand-in as the other
-    end. Other programs don't use the tunnel, so they're unaffected.
+    end. Other programs don't use the network, so they're unaffected.
     `aliases=off` in `config.ini` writes the real addresses instead.
-  - A stand-in always goes through the tunnel, even at home, so a stream
-    by name takes the trip through the server there too.
-- **Other names:** a `# Host = gaming-pc 192.168.1.50` line anywhere in the
-  `.conf` names an address that isn't a peer, such as a PC on the server's
-  home network, the same way. The address must be inside a peer's
-  `AllowedIPs`, and the name must not be a peer's; otherwise the log says
-  why it was skipped.
+  - A stand-in always goes over ZeroTier, even at home, so a stream by name
+    takes that path there too.
   - Atmosphère's Nintendo blocking is left alone, and names containing
     "nintendo" are never added.
   - If there's no hosts file, names stay off. zerotier-nx never creates
     one. `hosts=off` in `config.ini` turns this off.
 - **Connected notice:** after each boot, a 5-second toast shows
-  "Connected. IP: 10.x.y.z" the first time a peer handshakes. It doesn't
+  "Connected. IP: 10.x.y.z" once the Switch is on the network. It doesn't
   appear again on wake or reconnect. Turn it off with **Connection notice**
   in the overlay.
 - **Update notice:** after each boot, 10 seconds after it connects,
@@ -145,17 +122,18 @@ and anyone with it can join your network as the Switch.
   nothing happens (the reason is in `sysmodule.log`). This request shows
   GitHub the console's public IP address, as any web request does. Nothing
   else is sent. Turn it off with **Check for updates** in the overlay.
-- **Connections:** the overlay's **Connections** page lists every peer in
-  the `.conf` with the time of its last handshake: green within the last 3
-  minutes (a live session), yellow if older, grey if never. Press **A** on
-  a peer for its endpoint, how much was sent and received, keepalive,
-  allowed IPs and whether it uses a pre-shared key.
-- **Config:** with several `.conf` files in `config/zerotier-nx`, the
-  overlay's **Config** page switches between them at once. The choice is
-  written to `config.ini` (`conf=`), so it stays at the next boot. A
-  `ListenPort` change takes effect at the next start.
-- **Pause:** use the **WireGuard** switch in the overlay. While paused,
-  tunnel connections fail at once and everything else works normally.
+- **Devices:** the overlay's **Devices** page lists the devices the Switch
+  is in contact with: green when connected directly, with the latency;
+  yellow when relayed through ZeroTier's servers (slower; usually a network
+  that blocks direct connections at one end). Press **A** on one for its
+  ZeroTier ID, its address on the network, the path, when the last packet
+  arrived and its ZeroTier version. ZeroTier's own servers are listed too.
+- **Network:** the overlay's **Network** page shows the network's name and
+  ID, this Switch's ID and address, and the network's status, with a
+  warning if some of its settings didn't fit (see [Limits](#limits)).
+- **Pause:** use the **ZeroTier** switch in the overlay. While paused,
+  connections to the network fail at once and everything else works
+  normally. The setting survives a restart.
 - **Stop and start:** **Stop zerotier-nx** in the overlay ends the
   sysmodule and frees its memory, until the next boot or until you press
   **Start zerotier-nx**. Its boot setting doesn't change.
@@ -171,36 +149,48 @@ and anyone with it can join your network as the Switch.
   or restart. The Sysmodules overlay can't stop it itself: Atmosphère would
   freeze if its socket hook disappeared without being removed first.
 
-## AllowedIPs and your own network
+## Routes and your own network
 
-Addresses on the network the Switch is on are always reached directly,
-never through the tunnel, even when `AllowedIPs` covers them: at home,
-Moonlight talks to the PC over Wi-Fi as it always did. Away from home the
-same addresses go through the tunnel. Loopback, link-local, multicast and
-broadcast addresses never go through the tunnel either.
+Homebrew reaches the network's own addresses (its subnet, such as
+`10.147.17.0/24`) and every managed route in the network's settings.
 
-Everything else in `AllowedIPs` goes through the tunnel, including a
-`0.0.0.0/0` default route (for homebrew only; the console's own traffic is
-never touched). Inbound connections work the same way: anything your peers
-may send reaches homebrew listening on the Switch (an FTP server, say), as
-with any WireGuard interface. There are no access rules beyond that.
+To reach devices that don't run ZeroTier, such as everything else on your
+home network, one member at home has to forward traffic for them, and the
+network needs a managed route for their subnet through that member (for
+example `192.168.1.0/24` via `10.147.17.5`). ZeroTier's guide
+[Route between ZeroTier and physical networks](https://docs.zerotier.com/route-between-phys-and-virt/)
+covers the member's side. Nothing needs setting on the Switch: it follows
+the network's routes as they change.
+
+- Addresses on the network the Switch is on are always reached directly,
+  never over ZeroTier, even when a route covers them: at home, Moonlight
+  talks to the PC over Wi-Fi as it always did. Away from home the same
+  addresses go over ZeroTier. Loopback, link-local, multicast and broadcast
+  addresses never go over ZeroTier either.
+- A default route (`0.0.0.0/0`) is ignored: homebrew's internet traffic
+  never goes through the network, and the console's own traffic is never
+  touched.
+- Inbound connections work too: anything the network's rules let through
+  reaches homebrew listening on the Switch (an FTP server, say).
 
 ## Settings (`config/zerotier-nx/config.ini`)
 
-All settings are optional. They take effect after a restart (the overlay's
-Config page switches `.conf` files at once).
+Only `network` is needed. The others are optional, and take effect after a
+restart. `config.ini.example` has them all, with notes.
 
 | Key | Default | What |
 |---|---|---|
-| `conf` | the only `.conf` there is, else `wg0.conf` | Which `.conf` in `config/zerotier-nx` to use |
-| `hosts` | `on` | `off` stops writing peer names to the hosts file |
-| `aliases` | `on` | `off` writes peers' real private addresses to the hosts file, not stand-ins (see [Using it](#using-it)) |
+| `network` | none | The network to join: its 16-character ID |
+| `host` | none | `host = name address`: a name for an address on the network (any number of lines; see [Using it](#using-it)) |
+| `port` | worked out from the Switch's ID | ZeroTier's UDP port. The default is between 20000 and 65499 and always the same for a Switch, so it can't clash with a computer on the same Wi-Fi using ZeroTier's usual 9993. Set it only if you forward a port to the Switch. |
+| `hosts` | `on` | `off` stops writing names to the hosts file |
+| `aliases` | `on` | `off` writes the real private addresses to the hosts file, not stand-ins (see [Using it](#using-it)) |
 | `connect_notice` | `on` | `off` turns off the "Connected" toast at boot (as does the overlay switch) |
 | `update_check` | `on` | `off` stops checking GitHub for a newer release at boot (as does the overlay switch) |
-| `mitm` | `homebrew` | Which programs can reach the tunnel: `homebrew`, `off`, or `homebrew,sys-ftpd` (see below) |
+| `mitm` | `homebrew` | Which programs can reach the network: `homebrew`, `off`, or `homebrew,sys-ftpd` (see below) |
 | `mitm_titles` | none | Title IDs of home-screen forwarders that aren't found automatically, up to 16 (see below) |
-| `overlay_budget_kb` | `320` | Memory for tunnel sockets, shared by all apps (128–384). Raise it only if apps report "no buffer space". |
-| `log_udp` | none | Send the log to `ip:port` over UDP (a tunnel address works from anywhere) |
+| `overlay_budget_kb` | `320` | Memory for the network's sockets, shared by all apps (128–384). Raise it only if apps report "no buffer space". |
+| `log_udp` | none | Send the log to `ip:port` over UDP (an address on the network works from anywhere) |
 
 ### Home-screen forwarders
 
@@ -218,39 +208,55 @@ mitm_titles=01FF000000001000, 01FF000000002000
 
 The title ID is the one the forwarder was made with. The tool that made it
 shows it, and title managers such as DBI or Goldleaf list installed titles
-with their IDs; when a forwarder uses the tunnel, the log shows its ID
+with their IDs; when a forwarder uses the network, the log shows its ID
 ("session from program ..."). List only forwarders, and restart after
 changing it. The log shows which IDs were accepted. `mitm=off` turns all of
 this off.
 
-### FTP through the tunnel (sys-ftpd)
+### FTP over ZeroTier (sys-ftpd)
 
 With `mitm=homebrew,sys-ftpd`, the sys-ftpd sysmodule is also reachable on
-the Switch's tunnel address, e.g. `ftp://10.253.0.2:5000`. This costs about
-70 KB more memory, and zerotier-nx restarts sys-ftpd once at boot to take
-it over. FTP on the local network keeps working as before.
+the Switch's ZeroTier address, e.g. `ftp://10.147.17.20:5000`. This costs
+about 70 KB more memory, and zerotier-nx restarts sys-ftpd once at boot to
+take it over. FTP on the local network keeps working as before.
 
 sys-ftpd itself has two limits, with or without zerotier-nx:
-- **Speed:** about 11–14 Mbit/s on the local network and less through the
-  tunnel.
+- **Speed:** about 11–14 Mbit/s on the local network, and less over
+  ZeroTier.
 - **Back-to-back transfers:** after two large transfers in a row, it refuses
   connections for about 10 seconds while its sockets close.
 
 For big transfers, the ftpd homebrew app is much faster. It reaches the
-tunnel with the default `mitm=homebrew`.
+network with the default `mitm=homebrew`.
 
 Serving sys-ftpd also uses extra system sessions, which every sysmodule
 shares. On consoles running many sysmodules, other homebrew (such as
 Moonlight) may be unable to connect while it's on. If that happens, go back
 to `mitm=homebrew`.
 
+## Limits
+
+To fit in 2.5 MB, zerotier-nx holds less of a network's settings than
+ZeroTier on a computer does. Ordinary networks are far inside these limits:
+
+- 16 managed routes, 8 addresses for the Switch, and 128 rule entries. If
+  a network has more routes or addresses than that, the rest are left out
+  and the overlay says so. If it has more rules, its traffic is blocked,
+  and the overlay says that too.
+- 48 devices in contact at once. Past that, the one heard from longest ago
+  makes room, and is found again when it's needed. The Devices page lists
+  the first 32.
+- One network, IPv4 only. IPv6 addresses (including 6PLANE and RFC 4193)
+  aren't used, and neither is the network's DNS setting.
+- Networks that need single sign-on (SSO) can't be joined.
+
 ## Memory
 
 zerotier-nx uses exactly **2.5 MB** of the memory the system sets aside for
 sysmodules, taken once when it starts. It never grows or shrinks: about
-0.8 MB of code and 1.7 MB of data, including a fixed heap of about 950 KB.
-Busy tunnel sockets use more of that heap, up to the `overlay_budget_kb`
-limit.
+1.3 MB of code and fixed data, and a heap of about 1.2 MB that holds
+ZeroTier's state and the network's sockets (up to the `overlay_budget_kb`
+limit).
 
 - The overlay shows how much system memory is free with everything loaded.
   Keep some free: Nintendo starts some system modules only when they're
@@ -269,30 +275,28 @@ limit.
 
 ## Troubleshooting
 
-- **The overlay says "No config".**
-  - There's no `.conf` to use in `config/zerotier-nx`, and the message says
-    what to do: copy one there, or, if `config.ini`'s `conf=` names a file
-    that isn't there, pick one of the others on the Config page.
-  - A file saved as `wg0.conf.txt` (Windows hides the `.txt` by default) is
-    renamed to `wg0.conf` at boot, so it works as it is.
-- **The overlay says "Config error".**
-  - It names the `.conf` and the line it couldn't read (a key that isn't
-    valid base64, a missing `PrivateKey` or `Address`, an unknown setting).
-    Fix the file and restart, or pick another file on the Config page.
-- **The overlay says "Connecting..." and "No handshake yet".**
-  - The server didn't answer. Check the `Endpoint` (host name or address,
-    and port), that the port is forwarded to the server if you're away from
-    home, that the server has the Switch's public key as a peer, and the
-    pre-shared key if there is one. **Connections** shows per peer whether
-    its endpoint is resolved and when it last answered.
-  - A console whose clock is badly wrong can't handshake either (WireGuard
-    checks timestamps). zerotier-nx corrects a wrong clock from the
-    network; if the log says it couldn't, set the clock.
-- **The overlay says "Idle".**
-  - It was connected, but no peer has answered for 3 minutes. Without
-    `PersistentKeepalive`, that's normal when nothing uses the tunnel; the
-    next connection handshakes again. If it stays like this while an app is
-    trying, the server has gone away.
+- **The overlay says "No network set".**
+  - There's no `config/zerotier-nx/config.ini`, or it has no `network=`
+    line. Copy `config.ini.example` to `config.ini`, set `network=` and
+    restart. (On Windows, check the file isn't really `config.ini.txt`.)
+- **The overlay says "Not authorized".**
+  - Authorize the ID it shows in the network's member list. If the ID isn't
+    listed there, check that `network=` is the right network.
+- **The overlay says "No such network".**
+  - No controller knows that network ID: check `network=`. (A network
+    deleted at my.zerotier.com says this too.)
+- **The overlay says "Asking the network's controller..." for a long time.**
+  - The controller doesn't answer. At my.zerotier.com that's rare and
+    passes; a self-hosted controller must be running and reachable over
+    UDP.
+- **The overlay says "ZeroTier's servers don't answer."**
+  - The Wi-Fi network blocks ZeroTier's UDP traffic. Some hotel, school and
+    work networks do; try another network or a phone's hotspot.
+- **A device is yellow (relayed) on the Devices page.**
+  - It works, but more slowly: ZeroTier couldn't connect the two directly,
+    usually because of strict NAT or a firewall at one end. Streaming over
+    a relay is unlikely to be smooth. Forwarding a UDP port to the PC (its
+    ZeroTier port, 9993 by default) often fixes it.
 - **The overlay says the sysmodule isn't running.**
   - If it says which firmware this version runs on, the console's firmware
     is newer than that: update zerotier-nx. A new major firmware (24.0,
@@ -305,8 +309,8 @@ limit.
     sleeps the console never woke from. The file says which. **Turn back on**
     in the overlay deletes it and starts zerotier-nx again.
   - If `config/zerotier-nx/disabled` exists, delete it.
-  - If tailscale-nx is also installed and running, only one of the two can
-    serve homebrew: turn the other off in Sysmodules.
+  - If tailscale-nx or wireguard-nx is also installed and running, only one
+    of them can serve homebrew: turn the others off in Sysmodules.
 - **The overlay says "No internet connection."**
   - The Switch lost its internet connection. zerotier-nx reconnects on its
     own once it's back. On hotel or café Wi-Fi, sign in to the network
@@ -319,17 +323,16 @@ limit.
     boot's log is in `sysmodule.log.1`.
   - To watch it live, set `log_udp` to a computer's address.
 - **An app reports "no buffer space" (errno 105).**
-  - All apps share the tunnel socket memory. Raise `overlay_budget_kb`.
+  - All apps share the network's socket memory. Raise `overlay_budget_kb`.
 - **Moonlight is slow or choppy away from home.**
   - Check Moonlight's bitrate is within the
-    [limits we found safe](../README.md#moonlight), and that
-    the PC is added by name (a peer name, or a `# Host =` line): a PC added
-    by a local-network address (`10.x`, `172.16.x` to `172.31.x`,
-    `192.168.x`) is only safe up to 20 Mbit/s at 720p.
+    [limits we found safe](../README.md#moonlight), that the PC is added by
+    a name from a `host =` line (a PC added by its ZeroTier address is only
+    safe up to 20 Mbit/s at 720p), and that the PC is green (direct) on the
+    Devices page.
 - **Moonlight finds the PC at home but not away.**
-  - Check that Moonlight's saved host includes the peer name or a tunnel
-    address, that `AllowedIPs` covers the PC's address, and that the overlay
-    shows **Connected**.
+  - Check that Moonlight's saved host is the name from your `host =` line
+    (or a ZeroTier address), and that the overlay shows **Connected**.
 
 Still stuck? Ask on [Discord](https://discord.gg/GjUuBEqRYb) or
 [open an issue](https://github.com/UnderwaterOverground/zerotier-nx/issues),

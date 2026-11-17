@@ -7,7 +7,7 @@ apply to the parts they cover; see each project for the full text.
 
 | Component | Licence | Where |
 |---|---|---|
-| [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere) libstratosphere / libvapours (1.12.0) | GPL-2.0 | `third_party/Atmosphere` (submodule); linked into the sysmodule |
+| [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere) libstratosphere / libvapours (1.12.2) | GPL-2.0 | `third_party/Atmosphere` (submodule); linked into the sysmodule |
 | [libtesla](https://github.com/WerWolv/libtesla) | GPL-2.0 | `third_party/libtesla` (submodule); the overlay |
 | [libnx](https://github.com/switchbrew/libnx) | ISC | devkitPro; all console binaries |
 | [ZeroTier](https://github.com/zerotier/ZeroTierOne) core, 1.16.2 (`node/` and `include/` only) | MPL-2.0 | `third_party/ZeroTierOne` (submodule), built with the changes in `patches/zerotier-*.patch` (listed in `VENDORED.md`); linked into the sysmodule. MPL-2.0 allows combining with GPL-2.0 code (its section 3.3); the patched files stay under MPL-2.0 |

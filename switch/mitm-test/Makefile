@@ -45,7 +45,7 @@ INCLUDES	:=	include ../../native/interpose
 #ROMFS	:=	romfs
 APP_TITLE	:=	zerotier-nx MITM test
 APP_AUTHOR	:=	UnderwaterOverground
-APP_VERSION	:=	0.1.0
+APP_VERSION	:=	1.0.0
 
 #---------------------------------------------------------------------------------
 # options for code generation

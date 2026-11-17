@@ -21,6 +21,9 @@
 // Rounds in a row ztnx_driver_poll may skip poll() while the socket is
 // backlogged, before it polls anyway (for the caller's other fds).
 #define UDP_BACKLOG_ROUNDS 8
+// Rounds in a row poll() may report the socket ready with nothing to read
+// before it is taken as dropped (see empty_ready).
+#define UDP_EMPTY_READY_LIMIT 64
 // Datagrams are read UDP_STAGED at a time into sbuf (page-aligned: on the
 // Switch it is also the socket service's message buffer), UDP_SLOT bytes
 // each (ZeroTier's physical datagrams are 1432 bytes at most by default),
@@ -63,6 +66,11 @@ struct ZtnxDriver {
     // (ztnx_driver_reopen); reopens counts how often.
     int broken;
     unsigned int reopens;
+    // Rounds in a row poll() reported the socket ready but nothing could be
+    // read. A dropped socket can do this without any error saying so (seen
+    // in Airplane Mode: ~6 s of back-to-back rounds, until a send failed
+    // with EPIPE), so enough of them in a row count as broken.
+    int empty_ready;
 };
 
 // Errors that mean the socket itself is gone, not that a datagram failed.
@@ -154,6 +162,7 @@ void ztnx_driver_suspend(ZtnxDriver *d) {
         d->udp_fd = -1;
     }
     d->broken = 0;
+    d->empty_ready = 0;
     d->backlog = 0;
     d->n_staged = 0;
     d->poll_udp = -1;
@@ -412,10 +421,15 @@ int ztnx_driver_recv(ZtnxDriver *d, const struct pollfd *fds) {
         if (getsockopt(d->udp_fd, SOL_SOCKET, SO_ERROR, &err, &len) != 0 ? socket_gone(errno) : socket_gone(err))
             d->broken = 1;
     }
-    if (d->broken || !(rev & POLLIN)) return 0;
-    STEP("UDP receive");
-    d->n_staged = stage(d);
-    d->backlog = d->n_staged >= UDP_STAGED;
+    if (!d->broken && (rev & POLLIN)) {
+        STEP("UDP receive");
+        d->n_staged = stage(d);
+        d->backlog = d->n_staged >= UDP_STAGED;
+    }
+    if (d->n_staged > 0 || !rev)
+        d->empty_ready = 0;
+    else if (!d->broken && ++d->empty_ready >= UDP_EMPTY_READY_LIMIT)
+        d->broken = 1;  // reopening a socket that was fine costs little
     return d->n_staged;
 }
 

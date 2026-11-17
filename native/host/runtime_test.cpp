@@ -336,12 +336,35 @@ int main() {
         CHECK(ztnx_driver_reopen(d) == 0 && ztnx_driver_udp_port(d) == port && ztnx_driver_reopens(d) == 2);
         CHECK(polled());
         CHECK(delivered());
+        // Found by poll() reporting it ready round after round with nothing
+        // to read and no error (Airplane Mode did this for ~6 s). A UDP socket
+        // shut for reading stands in: always readable, every read empty.
+        {
+            pollfd q[ZTNX_DRIVER_MAX_FDS] = {};
+            CHECK(ztnx_driver_pollfds(d, q, ZTNX_DRIVER_MAX_FDS) == 1);
+            const int empty = socket(AF_INET, SOCK_DGRAM, 0);
+            CHECK(empty >= 0 && connect(empty, reinterpret_cast<sockaddr *>(&sin), sizeof sin) == 0 && shutdown(empty, SHUT_RD) == 0);
+            CHECK(dup2(empty, q[0].fd) == q[0].fd);
+            close(empty);
+        }
+        int empty_rounds = 0;
+        while (!ztnx_driver_broken(d) && empty_rounds < 1000) {
+            pollfd q[ZTNX_DRIVER_MAX_FDS] = {};
+            const int m = ztnx_driver_pollfds(d, q, ZTNX_DRIVER_MAX_FDS);
+            CHECK(m == 1 && ztnx_driver_poll(d, q, m, 100) == 1);
+            CHECK(ztnx_driver_recv(d, q) == 0);
+            empty_rounds++;
+        }
+        CHECK(empty_rounds == 64);  // UDP_EMPTY_READY_LIMIT
+        CHECK(!polled());
+        CHECK(ztnx_driver_reopen(d) == 0 && ztnx_driver_udp_port(d) == port && ztnx_driver_reopens(d) == 3);
+        CHECK(delivered());
         // An explicit suspend is not a broken socket.
         ztnx_driver_suspend(d);
         CHECK(!ztnx_driver_broken(d));
         close(sink);
         ztnx_driver_free(d);
-        std::puts("ok: a dropped socket is found (send, poll) and reopened on the same port");
+        std::puts("ok: a dropped socket is found (send, poll, empty reads) and reopened on the same port");
     }
 
     ZtnxStack *stack = ztnx_stack_new(ztnx_driver_now_ns());

@@ -194,6 +194,7 @@ namespace ams::bsd_mitm {
         constexpr int WireENetUnreach = 101;  // the network's traffic while the user has paused it
         constexpr int WireNonBlock = 0x800;
         constexpr int WireENoBufs = 105;
+        constexpr u32 MaxPollFds = 256;  // see Poll
 
         // ---- the real bsd:u ------------------------------------------------
 
@@ -528,6 +529,11 @@ namespace ams::bsd_mitm {
             Result Poll(sf::Out<s32> out_ret, sf::Out<s32> out_errno, u32 nfds, s32 timeout, const sf::InAutoSelectBuffer &fds_in, const sf::OutAutoSelectBuffer &fds_out) {
                 const size_t size = static_cast<size_t>(nfds) * sizeof(pollfd);
                 R_UNLESS(V() != nullptr && nfds > 0 && fds_in.GetSize() >= size && fds_out.GetSize() >= size, sm::mitm::ResultShouldForwardToSession());
+                // The copies below cost ~100 bytes per entry and the app
+                // picks the count: past a bound, a failed allocation would
+                // take the sysmodule down (as recvmmsg's did). Real apps poll
+                // a handful; an outsized poll goes to the console as it is.
+                R_UNLESS(nfds <= MaxPollFds, sm::mitm::ResultShouldForwardToSession());
                 std::vector<pollfd> fds(nfds);
                 std::memcpy(fds.data(), fds_in.GetPointer(), size);
                 bool any_virtual = false;

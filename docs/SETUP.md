@@ -30,8 +30,8 @@ to the SD card, adding them to the folders already there:
 | Path | What |
 |---|---|
 | `atmosphere/contents/4200000000005A54/` | The sysmodule. `flags/boot2.flag` makes it start at boot. |
-| `switch/.overlays/zerotier-nx.ovl` | The overlay: status, this Switch's ID, devices, a pause switch, stop and start |
-| `config/zerotier-nx/config.ini.example` | Settings template: copy it to `config.ini` and set `network=` |
+| `switch/.overlays/zerotier-nx.ovl` | The overlay: status, this Switch's ID, the network to join, devices, a pause switch, stop and start |
+| `config/zerotier-nx/config.ini.example` | Every setting, with notes. The overlay starts `config.ini` from it. |
 
 Then restart the console.
 
@@ -40,10 +40,15 @@ Then restart the console.
 Two things are needed: the Switch must know which network to join, and the
 network must let the Switch in.
 
-1. **The network ID.** Copy `config/zerotier-nx/config.ini.example` to
-   `config.ini` in the same folder, and set `network=` to the network's
-   16-character ID (on the network's page at my.zerotier.com). Only that
-   line is needed. Restart.
+1. **The network ID.** In the overlay, select **Network** and enter the
+   network's 16-character ID (on the network's page at my.zerotier.com) on
+   the keypad: by touch, or with the D-pad and **A** (**Y** deletes, **+**
+   joins). **Join** saves it as `network=` in `config/zerotier-nx/config.ini`
+   and joins straight away; no restart is needed. Later, **Network** then
+   **Change network** switches to another one (the Switch leaves the old
+   one).
+   On a computer instead: copy `config.ini.example` to `config.ini` in the
+   same folder and set `network=`. Only that line is needed. Restart.
 2. **Authorize the Switch.** Networks are private by default: a new member
    waits until it's authorized. The overlay shows **Authorize** with the
    Switch's 10-character ZeroTier ID. At my.zerotier.com, open the network,
@@ -82,9 +87,13 @@ it in `config/zerotier-nx/identity.secret` (and `identity.public`).
 
 ## Using it
 
-- **Moonlight:** add your PC by a name (below) rather than its ZeroTier
-  address. At home, Moonlight may also find the PC on the local network and
-  use that, which is fine. Away from home, it goes over ZeroTier.
+- **Moonlight:** add your PC by its ZeroTier address or by a name (below).
+  Either way it gets a stand-in (below): for an address, once an app first
+  connects to the PC's GameStream ports (47984 or 47989) over ZeroTier,
+  which Moonlight does when it lists the PC; from then until the next
+  restart, looking the address up gives the stand-in. At home, Moonlight may
+  also find the PC on the local network and use that, which is fine. Away
+  from home, it goes over ZeroTier.
 - **Names:** ZeroTier itself has no device names, so name the devices you
   use in `config.ini`, one line each:
 
@@ -107,7 +116,7 @@ it in `config/zerotier-nx/identity.secret` (and `identity.public`).
     end. Other programs don't use the network, so they're unaffected.
     `aliases=off` in `config.ini` writes the real addresses instead.
   - A stand-in always goes over ZeroTier, even at home, so a stream by name
-    takes that path there too.
+    or by ZeroTier address takes that path there too.
   - Atmosphère's Nintendo blocking is left alone, and names containing
     "nintendo" are never added.
   - If there's no hosts file, names stay off. zerotier-nx never creates
@@ -278,15 +287,20 @@ limit).
 ## Troubleshooting
 
 - **The overlay says "No network set".**
-  - There's no `config/zerotier-nx/config.ini`, or it has no `network=`
-    line. Copy `config.ini.example` to `config.ini`, set `network=` and
-    restart. (On Windows, check the file isn't really `config.ini.txt`.)
+  - No network ID has been entered: select **Network** and enter it. (If
+    you set it on a computer, check `config/zerotier-nx/config.ini` has a
+    `network=` line, and on Windows that the file isn't really
+    `config.ini.txt`.)
+- **The overlay says "Too little memory".**
+  - The Switch's identity can't be created: see
+    [The Switch's identity](#the-switchs-identity).
 - **The overlay says "Not authorized".**
   - Authorize the ID it shows in the network's member list. If the ID isn't
-    listed there, check that `network=` is the right network.
+    listed there, check the network ID (**Network** in the overlay).
 - **The overlay says "No such network".**
-  - No controller knows that network ID: check `network=`. (A network
-    deleted at my.zerotier.com says this too.)
+  - No controller knows that network ID: check it (**Network** in the
+    overlay), and change it there if it's wrong. (A network deleted at
+    my.zerotier.com says this too.)
 - **The overlay says "Asking the network's controller..." for a long time.**
   - The controller doesn't answer. At my.zerotier.com that's rare and
     passes; a self-hosted controller must be running and reachable over
@@ -329,9 +343,9 @@ limit).
 - **Moonlight is slow or choppy away from home.**
   - Check Moonlight's bitrate is within the
     [limits we found safe](../README.md#using-moonlight), that the PC is added by
-    a name from a `host =` line (a PC added by its ZeroTier address is only
-    safe up to 20 Mbit/s at 720p), and that the PC is green (direct) on the
-    Devices page.
+    the hosts file has the PC's stand-in (a line with `100.127.` in
+    `atmosphere/hosts`; without a hosts file it's only safe up to 20 Mbit/s
+    at 720p), and that the PC is green (direct) on the Devices page.
 - **Moonlight finds the PC at home but not away.**
   - Check that Moonlight's saved host is the name from your `host =` line
     (or a ZeroTier address), and that the overlay shows **Connected**.

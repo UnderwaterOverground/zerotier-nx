@@ -799,8 +799,7 @@ namespace ams {
                         told = true;
                         Log("identity: only %lu KB of system memory is free; waiting for %lu KB", static_cast<unsigned long>(free_bytes / 1024),
                             static_cast<unsigned long>(IdentityMinFree / 1024));
-                        status::SetConfigError("Not enough free memory to create this Switch's ZeroTier identity. Turn off another sysmodule, or make one on a "
-                                               "PC (zerotier-idtool generate) and copy identity.secret to config/zerotier-nx.");
+                        status::IdentityShortOfMemory();
                     }
                 }
                 os::SleepThread(TimeSpan::FromSeconds(1));
@@ -1336,6 +1335,8 @@ namespace ams {
             Log("config: no network= (16 hex digits) in %s; nothing to join until one is entered in the overlay", ConfigPath);
             status::SetConfigError("Open ZeroTier in Ultrahand (L + D-pad Down + R3), select Network and enter your network's ID.");
         }
+        // The overlay shows the network meanwhile (the first boot's wait).
+        status::SetNode(0, nwid);
         // First boot: this waits until the console has settled, then makes
         // the identity (see EnsureIdentity).
         const u64 node = EnsureIdentity();

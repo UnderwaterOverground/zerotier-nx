@@ -55,6 +55,7 @@ enum {
     ZTNX_CTL_FLAG_CONF_ERROR = 8,  // config.ini names no network (GetLastError says what to do)
     ZTNX_CTL_FLAG_NO_ROOTS = 16,   // ZeroTier's root servers don't answer (UDP blocked?)
     ZTNX_CTL_FLAG_MAKING_ID = 32,  // first boot: waiting to make this Switch's identity, or making it
+    ZTNX_CTL_FLAG_ID_NO_MEMORY = 64,  // ...and too little system memory is free to make it
 };
 
 // net_status: where joining the network stands (the values of

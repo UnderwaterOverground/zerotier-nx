@@ -150,12 +150,27 @@ from 75% at 25 Mbit/s to 95% when a stream collapses). Measured at 720p:
 
 | Host (video packet size) | Clean | Marginal | Collapsed |
 |---|---|---|---|
-| By ZeroTier address (1392 B) | 20 Mbit/s | 25 Mbit/s | 30 Mbit/s |
-| By name, through a stand-in (1024 B) | 25 Mbit/s | 28 Mbit/s | 30 Mbit/s |
+| Private address, no stand-in (1392 B) | 20 Mbit/s | 25 Mbit/s | 30 Mbit/s |
+| Through a stand-in (1024 B) | 25 Mbit/s | 28 Mbit/s | 30 Mbit/s |
 
 That's why named hosts resolve to stand-ins in `100.127.0.0/16`
 (`VSock::SetAliases`, `hosts.cpp`). For comparison, the same console with
 no MITM at all, on its LAN, is flat at 31 Mbit/s and collapses from 33.
+
+A PC added to Moonlight by its address gets one too. libnx's `getaddrinfo`
+asks the resolver even for a numeric address, and Atmosphère's hosts file
+matches any string as a name, so a line `100.127.c.d a.b.c.d` makes the
+address itself resolve to its stand-in. The MITM can't know which
+addresses Moonlight will stream from ahead of time, so it learns them: a
+TCP connect through the tunnel to port 47984 or 47989 (GameStream's HTTPS
+and HTTP ports, which Moonlight polls before any stream) queues the
+address (`hosts::LearnGameStreamHost`, lock-free, from the MITM thread),
+and the engine loop adds the line and rewrites the hosts file (up to 8,
+forgotten when the network changes or at reboot). Only GameStream ports:
+for a redirected name, Atmosphère's `dns_mitm` aborts if the lookup's
+service isn't numeric (`GetAddrInfoRequest`, `AMS_ABORT_UNLESS`), so a
+hosts line for an address an app looks up with a service name such as
+`"http"` would crash it. moonlight-common-c passes no service.
 
 ### A complete SD card tree
 

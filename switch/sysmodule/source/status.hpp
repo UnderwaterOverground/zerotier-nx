@@ -42,12 +42,17 @@ namespace ams::status {
     void SetConfigError(const char *message);
     // First boot: waiting to make this Switch's identity, or making it.
     void SetMakingIdentity(bool making);
-    // A network the overlay asked to join (ztnx:ctl SetNetwork, any thread),
-    // and taking it (main or engine thread): 0 if none is waiting.
+    // Still too little memory free to make it, long after boot: the overlay
+    // says so, with a toast.
+    void IdentityShortOfMemory();
+    // A network the overlay asked to join (ztnx:ctl SetNetwork, any thread;
+    // the overlay shows it from now on), and taking it (main or engine
+    // thread): 0 if none is waiting.
     void RequestNetwork(u64 nwid);
     u64 TakeNetworkRequest();
-    // Now joining nwid instead (main or engine thread): what was known
-    // about the old network, and the missing network= error, are dropped.
+    // Now joining nwid instead (any thread): what was known about the old
+    // network, and the missing network= error, are dropped; SetNetwork
+    // ignores the old one from now on.
     void ChangeNetwork(u64 nwid);
     // The network as ZeroTier reports it (engine thread, no lock held):
     // CONNECTED once it is up with an address, with a toast the first time;

@@ -230,6 +230,7 @@ namespace {
     bool g_we_started = false;
     char g_msg[2][64] = {};  // the outcome of the last stop or start
     bool g_msg_problem = false;  // drawn in red
+    u64 g_msg_joining = 0;  // the note is about joining this network
 
     void SetPhase(Phase p) {
         g_phase = p;
@@ -244,6 +245,7 @@ namespace {
         std::snprintf(g_msg[0], sizeof g_msg[0], "%s", first);
         std::snprintf(g_msg[1], sizeof g_msg[1], "%s", second);
         g_msg_problem = true;
+        g_msg_joining = 0;
     }
 
     // Progress or success.
@@ -478,6 +480,11 @@ namespace {
             return x.address < y.address;
         });
         std::snprintf(g_last_error, sizeof g_last_error, "%s", s.last_error);
+        // The note about joining goes once the network has answered: the
+        // status above says how it went.
+        if (g_msg_joining && g_status_ok && g_status.nwid == g_msg_joining && !(g_status.flags & ZTNX_CTL_FLAG_MAKING_ID) &&
+            g_status.net_status != ZTNX_CTL_NET_REQUESTING)
+            Note("");
         std::snprintf(g_net_name, sizeof g_net_name, "%s", s.net_name);
     }
 
@@ -636,6 +643,10 @@ namespace {
                 state = "Getting ready";
                 color = Blue;
             }
+            if (g_status.flags & ZTNX_CTL_FLAG_ID_NO_MEMORY) {
+                state = "Too little memory";
+                color = Red;
+            }
             if (Offline()) {
                 state = "Offline";
                 color = Grey;
@@ -673,6 +684,13 @@ namespace {
                 r->drawString("The zerotier-nx sysmodule isn't running.", false, x + 20, y + 75, 17, r->a(Grey));
                 r->drawString("It starts at boot, or with Start below.", false, x + 20, y + 100, 17, r->a(Grey));
             }
+            return;
+        }
+        if (g_status.flags & ZTNX_CTL_FLAG_ID_NO_MEMORY) {
+            // Long after boot and still short: it may never happen here.
+            r->drawString("Making this Switch's ZeroTier ID needs 3 MB", false, x + 20, y + 75, 15, r->a(Grey));
+            r->drawString("of free memory. Turn off a sysmodule you", false, x + 20, y + 95, 15, r->a(Grey));
+            r->drawString("don't need, or make the ID on a computer.", false, x + 20, y + 115, 15, r->a(Grey));
             return;
         }
         if (g_status.flags & ZTNX_CTL_FLAG_MAKING_ID) {
@@ -791,8 +809,8 @@ namespace {
         const tsl::Color c = g_msg_problem ? Red : White;
         // Never an empty string: Tesla's drawString reads one character past
         // its end before checking, so "" would draw whatever follows it.
-        if (g_msg[0][0]) r->drawString(g_msg[0], false, x + 20, y + 22, 15, r->a(c));
-        if (g_msg[1][0]) r->drawString(g_msg[1], false, x + 20, y + 42, 15, r->a(c));
+        if (g_msg[0][0]) r->drawString(g_msg[0], false, x + 20, y + 25, 15, r->a(c));
+        if (g_msg[1][0]) r->drawString(g_msg[1], false, x + 20, y + 47, 15, r->a(c));
     }
 
     void DrawTip(tsl::gfx::Renderer *r, s32 x, s32 y, s32 w, s32 h) {
@@ -1040,13 +1058,15 @@ namespace {
                 r->drawString("Your network's 16-character ID, from", false, x + 20, y + 25, 15, r->a(Grey));
                 r->drawString("my.zerotier.com or your own controller:", false, x + 20, y + 47, 15, r->a(Grey));
                 // In groups of four, as ZeroTier shows it; the rest to come.
+                // Each character centred in a cell, the whole over the keys.
                 const size_t len = std::strlen(m_entry);
-                s32 cx = x + 20;
+                const s32 keys_w = getWidth() - 40;
+                s32 cx = x + 20 + (keys_w - (16 * IdCell + 3 * IdGroupGap)) / 2;
                 for (size_t i = 0; i < 16; i++) {
-                    if (i && i % 4 == 0) cx += 14;
+                    if (i && i % 4 == 0) cx += IdGroupGap;
                     const char c[2] = {i < len ? m_entry[i] : '-', 0};
-                    r->drawString(c, false, cx, y + 95, 30, r->a(i < len ? White : Grey));
-                    cx += 22;
+                    r->drawString(c, false, cx + (IdCell - TextWidth(r, c, IdSize)) / 2, y + 95, IdSize, r->a(i < len ? White : Grey));
+                    cx += IdCell;
                 }
                 for (u32 k = 0; k < KeyCount; k++) {
                     s32 kx, ky, kw, kh;
@@ -1119,6 +1139,10 @@ namespace {
         private:
             static constexpr u32 KeyCount = 18, DeleteKey = 16, JoinKey = 17;
             static constexpr s32 KeysTop = 125, KeyGap = 8, KeyHeight = 50;
+            // The entered ID: a cell per character and a gap between groups,
+            // about as wide as the keys (a size already cached: see Drawer).
+            static constexpr s32 IdCell = 19, IdGroupGap = 9;
+            static constexpr u32 IdSize = 30;
             static constexpr tsl::Color Selected{0x0, 0xC, 0xF, 0xF};
             static constexpr tsl::Color KeyFill{0x3, 0x3, 0x3, 0xF};
 
@@ -1194,7 +1218,9 @@ namespace {
                 if (g_have_ctl && g_status_ok) {
                     ctl::g_set_network = nwid;
                     ctl::Wake();
-                    Note("Joining the network.", "Authorize this Switch if it asks.");
+                    if (g_status.flags & ZTNX_CTL_FLAG_MAKING_ID) Note("Saved. zerotier-nx joins it once this", "Switch has its ZeroTier ID.");
+                    else Note("Joining the network.", "Authorize this Switch if it asks.");
+                    g_msg_joining = nwid;
                 } else {
                     Note("Saved. zerotier-nx joins it when", "it next starts.");
                 }
@@ -1490,7 +1516,7 @@ namespace {
                     return true;
                 });
                 list->addItem(m_power);
-                list->addItem(new Drawer(DrawMessage), 50);
+                list->addItem(new Drawer(DrawMessage), 62);
 
                 // The sysmodule's "Connected. IP: ..." toast at boot; off is
                 // a marker file it checks when it connects.

@@ -1,9 +1,11 @@
-# zerotier-nx settings: copy to config.ini and edit. Only network= is needed.
-# Changes apply after a restart.
+# zerotier-nx settings. Entering the network in the ZeroTier overlay
+# (Network) makes config.ini from this file; or copy it to config.ini and
+# edit it. Only network= is needed. Other changes apply after a restart.
 #
 # The ZeroTier network to join: its 16-character ID, from my.zerotier.com or
-# your own controller. The Switch's own ID (10 characters) is in the overlay
-# and in sysmodule.log once it has started; authorize it in the controller.
+# your own controller. The overlay sets this line and joins at once. The
+# Switch's own ID (10 characters) is in the overlay and in sysmodule.log once
+# it has started; authorize it in the controller.
 network=0123456789abcdef
 # The UDP port ZeroTier uses. By default one worked out from this Switch's
 # ZeroTier ID (20000-65499, always the same), so it can't clash with a

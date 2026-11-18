@@ -18,8 +18,9 @@ It runs in the background on Atmosphère. You don't need port forwarding or a se
 - Works with homebrew launched through hbmenu, including supported home-screen forwarders.
 - Joins a ZeroTier network hosted at [my.zerotier.com](https://my.zerotier.com) or on your own controller.
 - Supports managed routes, so a device at home can give your Switch access to the rest of your home network.
-- Lets you give devices names, so you can add your PC to Moonlight by name.
-- Includes an Ultrahand overlay with connection status, your Switch's ZeroTier ID, and the devices it's in contact with. You can see latency and whether each connection is direct or relayed, or pause, start and stop the service.
+- Lets you set your network ID on the Switch, from the overlay.
+- Makes Moonlight send smaller packets that fit ZeroTier's, whether you add your PC by its ZeroTier address or by a name you give it.
+- Includes an Ultrahand overlay with connection status, your Switch's ZeroTier ID, the network to join, and the devices it's in contact with. You can see latency and whether each connection is direct or relayed, or pause, start and stop the service.
 - Offers optional update notifications and [sys-ftpd](https://github.com/cathery/sys-ftpd) access over ZeroTier.
 - Uses a fixed 2.5 MB of memory.
 
@@ -71,25 +72,21 @@ SD card
 
 This only shows the files to check. Keep the other files copied from the ZIP, along with everything that was already on your card.
 
-### 3. Add your network ID
+### 3. Enter your network ID
 
-On the SD card, open `config/zerotier-nx`. Make a copy of `config.ini.example` and name the copy `config.ini`.
+Put the SD card back in and turn the Switch on. Open Ultrahand with **L + D-pad Down + R3**, select **ZeroTier**, then select **Network**.
 
-Open `config.ini` in a text editor and put your network's 16-character ID on the `network=` line:
+Enter your network's 16-character ID on the keypad, by touch or with the D-pad and **A**, then select **Join**. You'll find the ID on your network's page at [my.zerotier.com](https://my.zerotier.com), or in your controller if you're hosting one yourself.
 
-```ini
-network=0123456789abcdef
-```
+The ID is saved on the `network=` line of `config/zerotier-nx/config.ini`. You can also set it there on a computer instead: copy `config.ini.example` to `config.ini` in that folder and put your ID on its `network=` line.
 
-Replace the example ID with your own. You'll find it on your network's page at [my.zerotier.com](https://my.zerotier.com), or in your controller if you're hosting one yourself.
+### 4. Find the Switch's ID
 
-### 4. Start the Switch and find its ID
+On the first boot, zerotier-nx creates the Switch's ZeroTier identity about two minutes after power-on, once the console has finished starting up. Until then the overlay shows **Getting ready**. You can enter the network ID meanwhile.
 
-Put the SD card back in and turn the Switch on. On the first boot, zerotier-nx creates the Switch's ZeroTier identity about two minutes after power-on, once the console has finished starting up. Give it a moment.
+Once the identity exists, the overlay shows **Not authorized**, with **Authorize** and a 10-character ID below it.
 
-Open Ultrahand with **L + D-pad Down + R3**, then select **ZeroTier**. You'll see **Not authorized**, with **Authorize** and a 10-character ID below it.
-
-The 10-character ID identifies your Switch. It's different from the 16-character network ID you added to `config.ini`.
+The 10-character ID identifies your Switch. It's different from the 16-character network ID you entered.
 
 ### 5. Authorise the Switch
 
@@ -103,9 +100,10 @@ The overlay should tell you what's missing:
 
 | Message or problem | What to check |
 |---|---|
-| **No network set** | Check that `config/zerotier-nx/config.ini` exists and contains a `network=` line. |
+| **No network set** | Select **Network** in the overlay and enter your network's ID. |
+| **Too little memory** | Creating the Switch's identity needs 3 MB of free memory once. Turn off a sysmodule you don't need, or create the identity on a computer: see [the Switch's identity](docs/SETUP.md#the-switchs-identity). |
 | **Not authorized** | Authorise the Switch's ID in your network's member list. |
-| **No such network** | Check the 16-character ID on the `network=` line. |
+| **No such network** | Check the network ID: select **Network** in the overlay to see or change it. |
 | **ZeroTier's servers don't answer** | The Wi-Fi network may be blocking ZeroTier's UDP traffic. Some hotel, school and work networks do this. |
 | **No ZeroTier menu in Ultrahand** | Check that `zerotier-nx.ovl` is inside `switch/.overlays` on the SD card. |
 
@@ -119,11 +117,11 @@ Keep the existing folders and copy the new files into them. Don't delete the fol
 
 ## Using Moonlight
 
-Add your PC to Moonlight by name. It works better than adding its ZeroTier address directly.
+Add your PC to Moonlight by its ZeroTier address, or by a name you give it.
 
-Moonlight treats private IP addresses, which most ZeroTier networks use, as local connections. It then sends packets too large to fit in a single ZeroTier packet. Adding the PC by name lets zerotier-nx map it to a stand-in address that makes Moonlight use smaller packets.
+Moonlight treats private IP addresses, which most ZeroTier networks use, as local connections. It then sends packets too large to fit in a single ZeroTier packet. zerotier-nx maps the PC to a stand-in address that makes Moonlight use smaller packets. With an address, that happens as soon as Moonlight first contacts the PC, which it does when it lists it.
 
-Add a `host` line to `config/zerotier-nx/config.ini`:
+To use a name instead, add a `host` line to `config/zerotier-nx/config.ini`:
 
 ```ini
 host = gaming-pc 10.147.17.5
@@ -131,14 +129,14 @@ host = gaming-pc 10.147.17.5
 
 Replace `10.147.17.5` with your PC's ZeroTier address. You can keep `gaming-pc` or choose another name. Restart the Switch, then add that name in Moonlight.
 
-These names are written to Atmosphère's hosts file, so you'll need an existing hosts file in `atmosphere/hosts`. Most setups already have one.
+Names and stand-ins are written to Atmosphère's hosts file, so you'll need an existing hosts file in `atmosphere/hosts`. Most setups already have one.
 
 At **720p and 60 FPS**, these are the bitrates I found reliable when testing with full-screen moving noise:
 
-| How the PC was added | Reliable bitrate in my testing |
+| Packets Moonlight sends | Reliable bitrate in my testing |
 |---|---|
-| By name | 25 Mbit/s |
-| By ZeroTier address | 20 Mbit/s |
+| Smaller (through the stand-in) | 25 Mbit/s |
+| Larger (no hosts file) | 20 Mbit/s |
 
 Artemis defaults to 35 Mbit/s at 1080p. Lower that to 20 Mbit/s, or use 720p.
 

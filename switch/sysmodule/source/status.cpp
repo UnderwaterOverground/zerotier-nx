@@ -149,11 +149,31 @@ namespace ams::status {
     void SetMakingIdentity(bool making) {
         std::scoped_lock lk(g_mutex);
         if (making) g_status.flags |= ZTNX_CTL_FLAG_MAKING_ID;
-        else g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_MAKING_ID);
+        else g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_MAKING_ID | ZTNX_CTL_FLAG_ID_NO_MEMORY);
+    }
+
+    void IdentityShortOfMemory() {
+        {
+            std::scoped_lock lk(g_mutex);
+            g_status.flags |= ZTNX_CTL_FLAG_ID_NO_MEMORY;
+        }
+        Toast(ConfigNotifyPath, "ZeroTier: setup needed",
+              "Not enough free memory to create this Switch's ZeroTier identity. Turn off another sysmodule, or make one on a "
+              "PC (zerotier-idtool generate) and copy identity.secret to config/zerotier-nx.",
+              ConfigToastMs);
     }
 
     void RequestNetwork(u64 nwid) {
-        if (nwid != 0) g_requested_nwid = nwid;
+        if (nwid == 0) return;
+        {
+            // The one it's on already: nothing changes.
+            std::scoped_lock lk(g_mutex);
+            if (nwid == g_status.nwid) return;
+        }
+        g_requested_nwid = nwid;
+        // Shown right away, even before the identity exists and the request
+        // is taken (within a second while the engine runs).
+        ChangeNetwork(nwid);
     }
 
     u64 TakeNetworkRequest() {
@@ -180,6 +200,8 @@ namespace ams::status {
         u32 toast_ms = 0;
         {
             std::scoped_lock lk(g_mutex);
+            // The network just left, reporting before the new one is joined.
+            if (c.nwid != g_status.nwid) return;
             g_status.net_status = c.status;
             g_status.truncated = c.truncated;
             g_net_ok = c.status == ZTNX_NET_OK && c.n_addrs > 0;

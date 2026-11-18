@@ -2,7 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/UnderwaterOverground/zerotier-nx)](https://github.com/UnderwaterOverground/zerotier-nx/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--2.0%20%2F%20BSD--3%20%2F%20MPL--2.0-blue)](#license)
-[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/GjUuBEqRYb)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/YgHetJguaF)
 
 ZeroTier for the Nintendo Switch. Runs in the background on Atmosphère and puts homebrew on your ZeroTier network, so you can use Moonlight, reach your NAS, or access your home network away from home.
 
@@ -114,7 +114,7 @@ Devices on the Wi-Fi network the Switch is using are reached directly, not throu
 
 **Orange screen when waking during a Moonlight stream?** That's a [Moonlight-Switch issue](https://github.com/XITRIX/Moonlight-Switch/issues/306), also reproducible without zerotier-nx. End the stream before putting the Switch to sleep.
 
-**Need help?** Check the [troubleshooting guide](docs/SETUP.md#troubleshooting), join [Discord](https://discord.gg/GjUuBEqRYb), or [open an issue](https://github.com/UnderwaterOverground/zerotier-nx/issues). Include `config/zerotier-nx/sysmodule.log` if reporting a bug.
+**Need help?** Check the [troubleshooting guide](docs/SETUP.md#troubleshooting), join [Discord](https://discord.gg/YgHetJguaF), or [open an issue](https://github.com/UnderwaterOverground/zerotier-nx/issues). Include `config/zerotier-nx/sysmodule.log` if reporting a bug.
 
 ## Building and credits
 

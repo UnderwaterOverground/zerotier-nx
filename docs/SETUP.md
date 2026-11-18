@@ -336,6 +336,6 @@ limit).
   - Check that Moonlight's saved host is the name from your `host =` line
     (or a ZeroTier address), and that the overlay shows **Connected**.
 
-Still stuck? Ask on [Discord](https://discord.gg/GjUuBEqRYb) or
+Still stuck? Ask on [Discord](https://discord.gg/YgHetJguaF) or
 [open an issue](https://github.com/UnderwaterOverground/zerotier-nx/issues),
 with your `sysmodule.log`.

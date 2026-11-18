@@ -12,6 +12,8 @@ No port forwarding and no server of your own: devices on the network find each o
 
 ## Features
 
+<img src="docs/images/devices.png" align="right" width="280" alt="ZeroTier devices in Ultrahand">
+
 - Runs at boot, and reconnects after sleep and when the Wi-Fi changes or drops.
 - Works with homebrew launched through hbmenu, including supported home-screen forwarders.
 - Joins any ZeroTier network: one made at [my.zerotier.com](https://my.zerotier.com) or on your own controller.

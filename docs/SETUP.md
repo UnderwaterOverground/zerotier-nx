@@ -102,7 +102,7 @@ it in `config/zerotier-nx/identity.secret` (and `identity.public`).
     is where ZeroTier networks usually are) is written as a stand-in in
     `100.127.0.0/16` with the same last two numbers (`10.147.17.5` becomes
     `100.127.17.5`), so Moonlight sends video packets that fit one ZeroTier
-    packet (see the [README](../README.md#moonlight)). Homebrew reaching the
+    packet (see the [README](../README.md#using-moonlight)). Homebrew reaching the
     stand-in reaches the real address, and sees the stand-in as the other
     end. Other programs don't use the network, so they're unaffected.
     `aliases=off` in `config.ini` writes the real addresses instead.
@@ -328,7 +328,7 @@ limit).
   - All apps share the network's socket memory. Raise `overlay_budget_kb`.
 - **Moonlight is slow or choppy away from home.**
   - Check Moonlight's bitrate is within the
-    [limits we found safe](../README.md#moonlight), that the PC is added by
+    [limits we found safe](../README.md#using-moonlight), that the PC is added by
     a name from a `host =` line (a PC added by its ZeroTier address is only
     safe up to 20 Mbit/s at 720p), and that the PC is green (direct) on the
     Devices page.

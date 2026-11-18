@@ -1,129 +1,202 @@
 # zerotier-nx
 
 [![Release](https://img.shields.io/github/v/release/UnderwaterOverground/zerotier-nx)](https://github.com/UnderwaterOverground/zerotier-nx/releases/latest)
-[![License](https://img.shields.io/badge/license-GPL--2.0%20%2F%20BSD--3%20%2F%20MPL--2.0-blue)](#license)
+[![License](https://img.shields.io/badge/license-GPL--2.0%20%2F%20BSD--3%20%2F%20MPL--2.0-blue)](#licence)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/YgHetJguaF)
 
-ZeroTier for the Nintendo Switch. Runs in the background on Atmosphère and puts homebrew on your ZeroTier network, so you can use Moonlight, reach your NAS, or access your home network away from home.
+ZeroTier for the Nintendo Switch. Connect your homebrew to your ZeroTier network to stream from your PC with Moonlight, reach your NAS, or use your home network while you're away.
 
-No port forwarding and no server of your own: devices on the network find each other through ZeroTier, and connect directly whenever the network allows.
+It runs in the background on Atmosphère. You don't need port forwarding or a server of your own. ZeroTier helps your devices find each other, and they connect directly when the network allows it.
 
 > Unofficial project. Not affiliated with Nintendo or ZeroTier, Inc. ZeroTier is a trademark of ZeroTier, Inc.
 
-## Features
+## What it does
 
 <img src="docs/images/devices.png" align="right" width="280" alt="ZeroTier devices in Ultrahand">
 
-- Runs at boot, and reconnects after sleep and when the Wi-Fi changes or drops.
+- Starts at boot and reconnects after sleep, a Wi-Fi change or a dropped connection.
 - Works with homebrew launched through hbmenu, including supported home-screen forwarders.
-- Joins any ZeroTier network: one made at [my.zerotier.com](https://my.zerotier.com) or on your own controller.
-- Managed routes work, so a member acting as a router can give the Switch your whole home network.
-- Names for devices, so Moonlight finds your PC by name.
-- Ultrahand overlay for status, this Switch's ZeroTier ID, the devices in contact (direct or relayed, and latency), and pause/start/stop.
-- Optional update notifications and [sys-ftpd](https://github.com/cathery/sys-ftpd) access over the network.
-- Fixed 2.5 MB memory usage.
+- Joins a ZeroTier network hosted at [my.zerotier.com](https://my.zerotier.com) or on your own controller.
+- Supports managed routes, so a device at home can give your Switch access to the rest of your home network.
+- Lets you give devices names, so you can add your PC to Moonlight by name.
+- Includes an Ultrahand overlay with connection status, your Switch's ZeroTier ID, and the devices it's in contact with. You can see latency and whether each connection is direct or relayed, or pause, start and stop the service.
+- Offers optional update notifications and [sys-ftpd](https://github.com/cathery/sys-ftpd) access over ZeroTier.
+- Uses a fixed 2.5 MB of memory.
 
-## Requirements
+## What you'll need
 
-- A Switch running [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere). Tested on a Mariko with Atmosphère 1.12.2 / firmware 22.5.0.
-- [Ultrahand](https://github.com/ppkantorski/Ultrahand-Overlay) for the overlay and notifications (optional, but recommended).
-- A ZeroTier network. A free account at [my.zerotier.com](https://my.zerotier.com) is the easiest way; a self-hosted controller works too.
+- A Switch running [Atmosphère](https://github.com/Atmosphere-NX/Atmosphere). Tested on a Mariko with Atmosphère 1.12.2 and firmware 22.5.0.
+- [Ultrahand](https://github.com/ppkantorski/Ultrahand-Overlay) for the overlay and notifications. It's optional, but recommended; the setup steps below use it.
+- A ZeroTier network. A free account at [my.zerotier.com](https://my.zerotier.com) is the easiest way to make one. A self-hosted controller works too.
 
 ## Installation
 
-**1. Download** the ZIP from the [latest release](https://github.com/UnderwaterOverground/zerotier-nx/releases/latest) (**Assets**, not “Source code”).
+### 1. Download and extract the ZIP
 
-**2. Copy the files** to your Switch SD card. Power the Switch off first.
+Download the ZIP from **Assets** on the [latest release](https://github.com/UnderwaterOverground/zerotier-nx/releases/latest) page. Choose the release ZIP, not either of the “Source code” downloads, then extract it on your computer.
 
-- **Windows:** merge the `atmosphere`, `config` and `switch` folders from the ZIP into the SD card root.
-- **macOS:** don't drag the whole `atmosphere` folder over — Finder may replace the existing one. Copy `atmosphere/contents/4200000000005A54` into `atmosphere/contents`, `switch/.overlays/zerotier-nx.ovl` into `switch/.overlays`, and the `config/zerotier-nx` folder into `config`. Use **Cmd + Shift + .** to show hidden folders.
+### 2. Copy the files to your SD card
 
-You should end up with:
+Turn the Switch off before removing its SD card, then open the card on your computer.
+
+The **SD card root** means the first folder you see when you open the card. Your existing `atmosphere` and `switch` folders should be there. All the destinations below start from that folder.
+
+Copy these three items from the extracted ZIP:
+
+| In the extracted ZIP | Where to put it on the SD card |
+|---|---|
+| The `4200000000005A54` folder inside `atmosphere/contents` | Inside `atmosphere/contents` |
+| The `zerotier-nx.ovl` file inside `switch/.overlays` | Inside `switch/.overlays` |
+| The `zerotier-nx` folder inside `config` | Inside `config` |
+
+Create any missing destination folders first. Copy the whole `4200000000005A54` and `zerotier-nx` folders, including everything inside them.
+
+**On macOS:** press **Cmd + Shift + .** in Finder to show the hidden `.overlays` folder. Follow the table above rather than dragging the ZIP's whole `atmosphere`, `config` or `switch` folders onto the card. Finder may replace an existing folder, which could remove files from the rest of your setup.
+
+To check you've put things in the right place, look for these files on the card:
 
 ```text
-atmosphere/contents/4200000000005A54/exefs.nsp
-switch/.overlays/zerotier-nx.ovl
-config/zerotier-nx/config.ini.example
+SD card
+├── atmosphere
+│   └── contents
+│       └── 4200000000005A54
+│           └── exefs.nsp
+├── switch
+│   └── .overlays
+│       └── zerotier-nx.ovl
+└── config
+    └── zerotier-nx
+        └── config.ini.example
 ```
 
-**3. Set your network.** In `config/zerotier-nx`, copy `config.ini.example` to `config.ini` and put your network's 16-character ID on the `network=` line:
+This only shows the files to check. Keep the other files copied from the ZIP, along with everything that was already on your card.
+
+### 3. Add your network ID
+
+On the SD card, open `config/zerotier-nx`. Make a copy of `config.ini.example` and name the copy `config.ini`.
+
+Open `config.ini` in a text editor and put your network's 16-character ID on the `network=` line:
 
 ```ini
 network=0123456789abcdef
 ```
 
-The network ID is on the network's page at my.zerotier.com (or wherever your controller shows it).
+Replace the example ID with your own. You'll find it on your network's page at [my.zerotier.com](https://my.zerotier.com), or in your controller if you're hosting one yourself.
 
-**4. Boot the Switch.** The first time, zerotier-nx makes the Switch's ZeroTier identity about two minutes after power-on, once the console has finished starting up. Open Ultrahand with **L + D-pad Down + R3** and select **ZeroTier**: it shows **This Switch** with a 10-character ID, and asks you to authorize it.
+### 4. Start the Switch and find its ID
 
-**5. Authorize the Switch** in the network's member list (at my.zerotier.com: open the network, find the Switch's ID under **Members** and authorize it). A few seconds later the overlay shows **Connected** and the Switch's address on the network, and you get a connection notification after each boot from then on.
+Put the SD card back in and turn the Switch on. On the first boot, zerotier-nx creates the Switch's ZeroTier identity about two minutes after power-on, once the console has finished starting up. Give it a moment.
 
-If it doesn't connect, the overlay says why:
+Open Ultrahand with **L + D-pad Down + R3**, then select **ZeroTier**. You'll see **Not authorized**, with **Authorize** and a 10-character ID below it.
 
-- **No network set:** there's no `config.ini`, or no `network=` line in it.
-- **Not authorized:** authorize the Switch's ID in the member list.
-- **No such network:** check the ID in `network=`.
-- **ZeroTier's servers don't answer:** the Wi-Fi network blocks ZeroTier's UDP traffic (some hotel, school and work networks do).
-- **No ZeroTier menu:** check that `zerotier-nx.ovl` is in `switch/.overlays`.
+The 10-character ID identifies your Switch. It's different from the 16-character network ID you added to `config.ini`.
 
-More detail in the [setup and troubleshooting guide](docs/SETUP.md).
+### 5. Authorise the Switch
 
-**Updates:** copy the files from the newer ZIP over the old ones and restart. Your settings and the Switch's identity are kept.
+Open your network at [my.zerotier.com](https://my.zerotier.com), find the Switch's 10-character ID under **Members**, and authorise it. If you use your own controller, approve the Switch in its member list.
 
-## Moonlight
+After a few seconds, the overlay should show **Connected** and the Switch's ZeroTier address. From then on, you'll get a connection notification after each boot if you're using Ultrahand.
 
-Add your PC by a name rather than its ZeroTier address. Moonlight treats private addresses (which is where ZeroTier networks usually are) as local, and sends packets too large for one ZeroTier packet; by name it sends smaller ones, which go through much better. Name the PC in `config.ini`:
+### If it doesn't connect
+
+The overlay should tell you what's missing:
+
+| Message or problem | What to check |
+|---|---|
+| **No network set** | Check that `config/zerotier-nx/config.ini` exists and contains a `network=` line. |
+| **Not authorized** | Authorise the Switch's ID in your network's member list. |
+| **No such network** | Check the 16-character ID on the `network=` line. |
+| **ZeroTier's servers don't answer** | The Wi-Fi network may be blocking ZeroTier's UDP traffic. Some hotel, school and work networks do this. |
+| **No ZeroTier menu in Ultrahand** | Check that `zerotier-nx.ovl` is inside `switch/.overlays` on the SD card. |
+
+There's more detail in the [setup and troubleshooting guide](docs/SETUP.md).
+
+### Updating
+
+Download and extract the newer release ZIP, then copy its files to the same locations on your SD card and restart the Switch. Replace older files when prompted.
+
+Keep the existing folders and copy the new files into them. Don't delete the folders first or choose an option that replaces an entire folder. Your settings and the Switch's identity are kept when you update this way.
+
+## Using Moonlight
+
+Add your PC to Moonlight by name. It works better than adding its ZeroTier address directly.
+
+Moonlight treats private IP addresses, which most ZeroTier networks use, as local connections. It then sends packets too large to fit in a single ZeroTier packet. Adding the PC by name lets zerotier-nx map it to a stand-in address that makes Moonlight use smaller packets.
+
+Add a `host` line to `config/zerotier-nx/config.ini`:
 
 ```ini
 host = gaming-pc 10.147.17.5
 ```
 
-Then restart, and add `gaming-pc` in Moonlight. zerotier-nx maps the name to a stand-in address so Moonlight uses smaller packets. Names are written to Atmosphère's hosts file, so there needs to be one in `atmosphere/hosts` (most setups have one already).
+Replace `10.147.17.5` with your PC's ZeroTier address. You can keep `gaming-pc` or choose another name. Restart the Switch, then add that name in Moonlight.
 
-These are the bitrates I found reliable at 720p and 60 FPS, tested against full-screen moving noise:
+These names are written to Atmosphère's hosts file, so you'll need an existing hosts file in `atmosphere/hosts`. Most setups already have one.
 
-| Added by name | Added by ZeroTier address |
+At **720p and 60 FPS**, these are the bitrates I found reliable when testing with full-screen moving noise:
+
+| How the PC was added | Reliable bitrate in my testing |
 |---|---|
-| 25 Mbit/s | 20 Mbit/s |
+| By name | 25 Mbit/s |
+| By ZeroTier address | 20 Mbit/s |
 
-Artemis defaults to 35 Mbit/s at 1080p; lower that to 20, or use 720p.
+Artemis defaults to 35 Mbit/s at 1080p. Lower that to 20 Mbit/s, or use 720p.
 
-## Your home network
+## Reaching the rest of your home network
 
-To reach devices on your home network that don't run ZeroTier (a NAS, a printer, the PC's LAN address), one ZeroTier member at home has to route for them, and the network needs a managed route for your home subnet through that member (for example `192.168.1.0/24` via `10.147.17.5`). ZeroTier's guide on [route between ZeroTier and physical networks](https://docs.zerotier.com/route-between-phys-and-virt/) covers the router's side. zerotier-nx follows the network's managed routes; no setting is needed on the Switch.
+You can also reach devices that don't run ZeroTier, such as a NAS or printer, or connect to your PC using its home LAN address. You'll need two things set up first:
 
-Devices on the Wi-Fi network the Switch is using are reached directly, not through ZeroTier.
+1. A device at home that's on your ZeroTier network and configured to route traffic to your home network.
+2. A managed route in ZeroTier that sends traffic for your home subnet through that device. For example, `192.168.1.0/24` via `10.147.17.5`.
+
+ZeroTier's [guide to routing between ZeroTier and physical networks](https://docs.zerotier.com/route-between-phys-and-virt/) covers that setup. Once it's done, zerotier-nx follows the managed routes automatically. There's nothing extra to configure on the Switch.
+
+Devices on the Wi-Fi network your Switch is currently using are reached directly, without going through ZeroTier.
 
 ## Limitations
 
-- **Homebrew only.** Games and Nintendo services don't use the network. Home-screen forwarders with title IDs starting `01` need an entry in `mitm_titles` ([instructions](docs/SETUP.md#home-screen-forwarders)).
-- One network at a time, IPv4 only. The network's IPv6 addresses (including 6PLANE and RFC 4193) aren't used.
-- No default route: homebrew's internet traffic doesn't go through the network, even if the network has a `0.0.0.0/0` route.
-- The network's DNS settings aren't used. Name devices with `host =` lines instead.
-- Networks that need single sign-on (SSO) aren't supported.
-- Use **Stop** in the ZeroTier overlay to stop it without rebooting (close homebrew first). Disabling it in Sysmodules requires a restart.
-- Tested on one Mariko Switch so far. Reports from other models are welcome.
+- **Homebrew only.** Games and Nintendo services don't use ZeroTier. Home-screen forwarders with title IDs starting `01` need an entry in `mitm_titles`; see the [forwarder setup instructions](docs/SETUP.md#home-screen-forwarders).
+- **One network at a time, IPv4 only.** IPv6 addresses, including 6PLANE and RFC 4193, aren't used.
+- **No default route.** Homebrew's internet traffic doesn't go through ZeroTier, even if your network has a `0.0.0.0/0` route.
+- **ZeroTier's DNS settings aren't used.** Give devices names with `host =` lines in `config.ini` instead.
+- **Networks requiring single sign-on (SSO) aren't supported.**
+- **Stopping it takes a little care.** Close your homebrew first, then choose **Stop** in the ZeroTier overlay. That stops it without a reboot. If you disable it in Sysmodules instead, you'll need to restart the Switch.
+- **Tested on one Mariko Switch so far.** Reports from other models are welcome.
 
 ## FAQ
 
-**Will this affect online games or Nintendo services?** No. It only handles homebrew traffic to the network's addresses and routes, and leaves Atmosphère's Nintendo-server blocking alone.
+**Will this affect online games or Nintendo services?**
 
-**Can I run it alongside tailscale-nx or wireguard-nx?** All three can be installed, but only one can handle homebrew at a time. Disable the others in Sysmodules.
+No. It only handles homebrew traffic going to your ZeroTier network's addresses and routes. It also leaves Atmosphère's Nintendo-server blocking alone.
 
-**Is the connection private?** ZeroTier encrypts traffic end to end between devices on the network. ZeroTier's root servers help devices find each other and relay traffic when they can't connect directly; they can't read it. The network's controller (my.zerotier.com, or your own) decides who can join. The optional update check contacts GitHub.
+**Can I run it alongside tailscale-nx or wireguard-nx?**
 
-**Orange screen when waking during a Moonlight stream?** That's a [Moonlight-Switch issue](https://github.com/XITRIX/Moonlight-Switch/issues/306), also reproducible without zerotier-nx. End the stream before putting the Switch to sleep.
+You can have all three installed, but only one can handle homebrew traffic at a time. Disable the others in Sysmodules.
 
-**Need help?** Check the [troubleshooting guide](docs/SETUP.md#troubleshooting), join [Discord](https://discord.gg/YgHetJguaF), or [open an issue](https://github.com/UnderwaterOverground/zerotier-nx/issues). Include `config/zerotier-nx/sysmodule.log` if reporting a bug.
+**Is the connection private?**
+
+ZeroTier encrypts traffic end to end between devices on the network. Its root servers help devices find each other and relay traffic when a direct connection isn't possible, but they can't read that traffic. Your network's controller, whether that's my.zerotier.com or your own, decides who can join.
+
+The optional update check contacts GitHub.
+
+**Why do I get an orange screen when waking the Switch during a Moonlight stream?**
+
+That's a [Moonlight-Switch issue](https://github.com/XITRIX/Moonlight-Switch/issues/306) that also happens without zerotier-nx. End the stream before putting the Switch to sleep.
+
+**Where can I get help?**
+
+Have a look at the [troubleshooting guide](docs/SETUP.md#troubleshooting), join [Discord](https://discord.gg/YgHetJguaF), or [open an issue](https://github.com/UnderwaterOverground/zerotier-nx/issues). If you're reporting a bug, include `config/zerotier-nx/sysmodule.log`.
 
 ## Building and credits
 
 Build instructions are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). The build runs in Docker, and most tests don't need a Switch.
 
-Forked from [wireguard-nx](https://github.com/UnderwaterOverground/wireguard-nx) (itself forked from [tailscale-nx](https://github.com/UnderwaterOverground/tailscale-nx)), replacing its WireGuard engine with [ZeroTier](https://github.com/zerotier/ZeroTierOne)'s core. Uses [libstratosphere](https://github.com/Atmosphere-NX/Atmosphere), [libnx](https://github.com/switchbrew/libnx), [libtesla](https://github.com/WerWolv/libtesla), [smoltcp](https://github.com/smoltcp-rs/smoltcp), [rustls](https://github.com/rustls/rustls) and [RustCrypto](https://github.com/RustCrypto). Also drew on [sys-GRID0](https://github.com/redluigi323/sys-GRID0) and [ryu_ldn_nx](https://github.com/Ethiquema/ryu_ldn_nx).
+This project is forked from [wireguard-nx](https://github.com/UnderwaterOverground/wireguard-nx), itself a fork of [tailscale-nx](https://github.com/UnderwaterOverground/tailscale-nx). It replaces the WireGuard engine with [ZeroTier](https://github.com/zerotier/ZeroTierOne)'s core.
+
+It uses [libstratosphere](https://github.com/Atmosphere-NX/Atmosphere), [libnx](https://github.com/switchbrew/libnx), [libtesla](https://github.com/WerWolv/libtesla), [smoltcp](https://github.com/smoltcp-rs/smoltcp), [rustls](https://github.com/rustls/rustls) and [RustCrypto](https://github.com/RustCrypto). It also draws on [sys-GRID0](https://github.com/redluigi323/sys-GRID0) and [ryu_ldn_nx](https://github.com/Ethiquema/ryu_ldn_nx).
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party licences.
 
-## License
+## Licence
 
 The sysmodule, overlay and socket layer are GPL-2.0-or-later ([LICENSE](LICENSE)). The Rust code under `crates/` is BSD-3-Clause ([crates/LICENSE](crates/LICENSE)). ZeroTier's core is MPL-2.0; the changes made to it are in `patches/` and listed in [VENDORED.md](VENDORED.md).

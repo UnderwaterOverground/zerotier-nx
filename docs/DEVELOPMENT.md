@@ -172,6 +172,15 @@ service isn't numeric (`GetAddrInfoRequest`, `AMS_ABORT_UNLESS`), so a
 hosts line for an address an app looks up with a service name such as
 `"http"` would crash it. moonlight-common-c passes no service.
 
+Streamed on the console that way (1.0.0, Artemis 1.5.4 with the PC added
+by its ZeroTier address, a wired sender, HEVC noise; one run each, watched
+for two to three minutes): 720p at 25 and 28 Mbit/s clean (0% loss,
+network FPS equal to the host's, 99% of datagrams received, loop 65-74%
+busy); 1080p at 20 clean (about 24 Mbit/s on the wire); 720p at 30
+collapsed (50% loss, 30 FPS, about 12% of datagrams lost before `recv`
+with the loop 78% busy). The sender's frames and physical datagrams were
+one to one, so no video packet was split.
+
 ### A complete SD card tree
 
 `tools/stage-sd.sh` stages `dist/sd/`: Atmosphère 1.12.0, hekate, the

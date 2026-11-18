@@ -1074,12 +1074,13 @@ namespace {
                     const bool sel = k == m_sel && !m_touch;
                     const bool off = k == JoinKey && len != 16;
                     if (sel) r->drawRect(kx - 2, ky - 2, kw + 4, kh + 4, r->a(Selected));  // a 2-pixel border
-                    r->drawRect(kx, ky, kw, kh, r->a(KeyFill));
+                    r->drawRect(kx, ky, kw, kh, r->a(KeyColor(k)));
                     const char *label = KeyLabel(k);
                     const u32 size = k < 16 ? 30 : 20;
                     const s32 tw = TextWidth(r, label, size);
                     r->drawString(label, false, kx + (kw - tw) / 2, ky + kh / 2 + static_cast<s32>(size) * 7 / 20, size, r->a(off ? Grey : White));
                 }
+                if (m_flash > 0) m_flash--;
                 if (m_msg[0]) {
                     r->drawString(m_msg, false, x + 20, KeysBottom() + 35, 15, r->a(m_msg_problem ? Red : Grey));
                 } else if (g_status_ok && g_status.nwid) {
@@ -1126,6 +1127,9 @@ namespace {
 
             bool onTouch(tsl::elm::TouchEvent event, s32 cx, s32 cy, s32, s32, s32 ix, s32 iy) override {
                 const s32 k = KeyAt(cx, cy);
+                // Lit while the finger is on the key it began on, as Tesla's
+                // list items are.
+                m_held = event != tsl::elm::TouchEvent::Release && k >= 0 && KeyAt(ix, iy) == k ? k : -1;
                 if (k < 0) return false;
                 m_touch = true;
                 // A tap: released on the key it began on.
@@ -1145,6 +1149,8 @@ namespace {
             static constexpr u32 IdSize = 30;
             static constexpr tsl::Color Selected{0x0, 0xC, 0xF, 0xF};
             static constexpr tsl::Color KeyFill{0x3, 0x3, 0x3, 0xF};
+            // Tesla's click colour at its brightest (ColorClickAnimation).
+            static constexpr tsl::Color Lit{0x0, tsl::style::ListItemHighlightSaturation, tsl::style::ListItemHighlightSaturation, 0xF};
 
             static const char *KeyLabel(u32 k) {
                 static const char *const hex[16] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
@@ -1188,6 +1194,9 @@ namespace {
             }
 
             void Press(u32 k) {
+                // Tesla's click flash, fading over the same number of frames.
+                m_flash_key = k;
+                m_flash = tsl::style::ListItemHighlightLength;
                 m_msg[0] = 0;
                 const size_t len = std::strlen(m_entry);
                 if (k < 16) {
@@ -1238,6 +1247,19 @@ namespace {
             u32 m_sel = 0;
             u32 m_repeat = 0;
             bool m_touch = false;
+            s32 m_held = -1;     // the key under a finger, or -1
+            u32 m_flash_key = 0;
+            u8 m_flash = 0;      // frames left of the click flash on m_flash_key
+
+            // The key's fill: lit while touched, fading back after a press.
+            tsl::Color KeyColor(u32 k) const {
+                if (static_cast<s32>(k) == m_held) return Lit;
+                if (k != m_flash_key || m_flash == 0) return KeyFill;
+                const auto mix = [this](u8 from, u8 to) {
+                    return static_cast<u8>(from + (static_cast<int>(to) - from) * m_flash / tsl::style::ListItemHighlightLength);
+                };
+                return tsl::Color{mix(KeyFill.r, Lit.r), mix(KeyFill.g, Lit.g), mix(KeyFill.b, Lit.b), 0xF};
+            }
     };
 
     class NetworkIdGui : public tsl::Gui {

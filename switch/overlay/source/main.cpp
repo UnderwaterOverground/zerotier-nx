@@ -4,6 +4,7 @@
 #include <tesla.hpp>
 
 #include <dirent.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <atomic>
@@ -58,6 +59,7 @@ namespace {
         std::atomic<int> g_set_paused{-1};         // a SetPaused to send (0 or 1)
         std::atomic<bool> g_pause_pending{false};  // until a status after it is in
         std::atomic<bool> g_stop{false};           // a Stop to send
+        std::atomic<u64> g_set_network{0};         // a SetNetwork to send (0: none)
         std::atomic<bool> g_stop_done{false};
         Result g_stop_rc = 0;
         u32 g_stop_code = 0;
@@ -143,6 +145,10 @@ namespace {
                 if (g_open && paused >= 0) {
                     const u8 v = static_cast<u8>(paused);
                     Call([&] { return serviceDispatchIn(&g_session, 1, v); });
+                }
+                const u64 nwid = g_set_network.exchange(0);
+                if (g_open && nwid) {
+                    Call([&] { return serviceDispatchIn(&g_session, 6, nwid); });
                 }
                 Refresh();
                 if (paused >= 0) g_pause_pending = false;
@@ -626,6 +632,10 @@ namespace {
                 state = "No network set";
                 color = Red;
             }
+            if (g_status.flags & ZTNX_CTL_FLAG_MAKING_ID) {
+                state = "Getting ready";
+                color = Blue;
+            }
             if (Offline()) {
                 state = "Offline";
                 color = Grey;
@@ -665,13 +675,28 @@ namespace {
             }
             return;
         }
+        if (g_status.flags & ZTNX_CTL_FLAG_MAKING_ID) {
+            // First boot: the identity waits until the console has started up.
+            DrawTwoLines(r, "Making this Switch's ZeroTier ID. That happens once, about 2 minutes after power-on.", x + 20, y + 75, 15, Grey, 46);
+            if (!g_status.nwid) r->drawString("Meanwhile, select Network to enter its ID.", false, x + 20, y + 118, 15, r->a(White));
+            return;
+        }
         if (Offline()) {
             r->drawString("No internet connection.", false, x + 20, y + 75, 17, r->a(Grey));
             r->drawString("It reconnects once the Switch is back online.", false, x + 20, y + 102, 17, r->a(Grey));
             return;
         }
         if ((g_status.flags & ZTNX_CTL_FLAG_CONF_ERROR) && g_status.state != ZTNX_CTL_PAUSED) {
-            DrawTwoLines(r, g_last_error[0] ? g_last_error : "Add network=<its 16-digit ID> to config/zerotier-nx/config.ini and restart.", x + 20, y + 75, 15, Grey, 46);
+            if (!g_status.nwid) {
+                r->drawString("Select Network below and enter", false, x + 20, y + 75, 17, r->a(White));
+                r->drawString("your network's 16-character ID.", false, x + 20, y + 100, 17, r->a(White));
+            } else {
+                DrawTwoLines(r, g_last_error, x + 20, y + 75, 15, Grey, 46);
+            }
+            return;
+        }
+        if (g_status.state == ZTNX_CTL_STARTING) {
+            r->drawString("Getting ready to connect.", false, x + 20, y + 75, 17, r->a(Grey));
             return;
         }
         if (Stalled()) {
@@ -694,7 +719,7 @@ namespace {
                     return;
                 case ZTNX_CTL_NET_NOT_FOUND:
                     std::snprintf(line, sizeof line, "Network %016llx doesn't exist.", nwid);
-                    second = "Check network= in config.ini.";
+                    second = "Check the ID: select Network below.";
                     break;
                 case ZTNX_CTL_NET_AUTH_REQUIRED:
                     std::snprintf(line, sizeof line, "This network asks for single sign-on,");
@@ -750,7 +775,7 @@ namespace {
         };
         if (!g_status_ok) return;
         if (g_status.flags & ZTNX_CTL_FLAG_MITM) line("Homebrew apps reach the network.", White);
-        if (g_status.flags & ZTNX_CTL_FLAG_HOSTS) line("Names from config.ini resolve (Moonlight).", White);
+        if (g_status.flags & ZTNX_CTL_FLAG_HOSTS) line("Device names resolve (Moonlight).", White);
         if (g_status.state == ZTNX_CTL_PAUSED) line("Paused: the network is unreachable.", Grey);
         if (g_status.memory_kb) {
             char mem[96];
@@ -801,6 +826,82 @@ namespace {
                 std::remove(path);
             }
         });
+    }
+
+    // ---- the network to join ------------------------------------------------
+
+    constexpr const char ConfigPath[] = "sdmc:/config/zerotier-nx/config.ini";
+    constexpr const char ConfigExamplePath[] = "sdmc:/config/zerotier-nx/config.ini.example";
+    constexpr const char ConfigNewPath[] = "sdmc:/config/zerotier-nx/config.ini.new";
+
+    // Whether a config.ini line (not a comment) sets network=.
+    bool IsNetworkLine(const char *p, size_t len) {
+        size_t i = 0;
+        while (i < len && (p[i] == ' ' || p[i] == '\t')) i++;
+        if (len - i < 7 || std::strncmp(p + i, "network", 7) != 0) return false;
+        i += 7;
+        while (i < len && (p[i] == ' ' || p[i] == '\t')) i++;
+        return i < len && p[i] == '=';
+    }
+
+    // Puts network=<nwid> in config.ini, keeping every other line as it is.
+    // Without a config.ini yet it starts from config.ini.example, whose
+    // comments explain the other settings. Written beside it and renamed
+    // into place, so a failed write leaves the old file.
+    bool SaveNetwork(u64 nwid) {
+        static char in[8192];
+        static char out[sizeof in + 64];
+        bool ok = false;
+        tsl::hlp::doWithSDCardHandle([&] {
+            mkdir("sdmc:/config", 0777);
+            mkdir("sdmc:/config/zerotier-nx", 0777);
+            size_t n = 0;
+            FILE *f = std::fopen(ConfigPath, "rb");
+            if (!f) f = std::fopen(ConfigExamplePath, "rb");
+            if (f) {
+                n = std::fread(in, 1, sizeof in - 1, f);
+                const bool whole = std::feof(f) || std::fgetc(f) == EOF;
+                std::fclose(f);
+                if (!whole) return;  // too big to be ours: leave it alone
+            }
+            in[n] = 0;
+            char line[32];
+            std::snprintf(line, sizeof line, "network=%016llx", static_cast<unsigned long long>(nwid));
+            size_t o = 0;
+            bool replaced = false;
+            for (const char *p = in; *p;) {
+                const char *eol = std::strchr(p, '\n');
+                const size_t len = eol ? static_cast<size_t>(eol - p) + 1 : std::strlen(p);
+                if (!replaced && IsNetworkLine(p, len)) {
+                    const char *ending = eol ? (len >= 2 && p[len - 2] == '\r' ? "\r\n" : "\n") : "\n";
+                    o += static_cast<size_t>(std::snprintf(out + o, sizeof out - o, "%s%s", line, ending));
+                    replaced = true;
+                } else {
+                    std::memcpy(out + o, p, len);
+                    o += len;
+                }
+                p += len;
+            }
+            if (!replaced) {
+                // At the top, before the rest.
+                const size_t head = std::strlen(line) + 1;
+                std::memmove(out + head, out, o);
+                std::memcpy(out, line, head - 1);
+                out[head - 1] = '\n';
+                o += head;
+            }
+            FILE *w = std::fopen(ConfigNewPath, "wb");
+            if (!w) return;
+            const bool wrote = std::fwrite(out, 1, o, w) == o;
+            const bool closed = std::fclose(w) == 0;
+            if (!wrote || !closed) {
+                std::remove(ConfigNewPath);
+                return;
+            }
+            std::remove(ConfigPath);
+            ok = std::rename(ConfigNewPath, ConfigPath) == 0;
+        });
+        return ok;
     }
 
     // ---- GUI ----------------------------------------------------------------
@@ -892,7 +993,7 @@ namespace {
             std::snprintf(v, sizeof v, "%016llx", static_cast<unsigned long long>(g_status.nwid));
             line("Network ID", v, White);
         } else {
-            line("Network ID", "none in config.ini", Red);
+            line("Network ID", "none yet", Red);
         }
         std::snprintf(v, sizeof v, "%010llx", static_cast<unsigned long long>(g_status.node));
         line("This Switch", v, White);
@@ -924,14 +1025,228 @@ namespace {
         }
     }
 
+    // The network ID keypad: 0-9 and a-f, Delete and Join, by touch or with
+    // the D-pad and A (Y deletes, + joins). The Switch's own keyboard is a
+    // library applet, which an overlay (not an applet) can't open.
+    class Keypad : public tsl::elm::Element {
+        public:
+            Keypad() {
+                m_entry[0] = 0;
+                m_msg[0] = 0;
+            }
+
+            void draw(tsl::gfx::Renderer *r) override {
+                const s32 x = getX(), y = getY();
+                r->drawString("Your network's 16-character ID, from", false, x + 20, y + 25, 15, r->a(Grey));
+                r->drawString("my.zerotier.com or your own controller:", false, x + 20, y + 47, 15, r->a(Grey));
+                // In groups of four, as ZeroTier shows it; the rest to come.
+                const size_t len = std::strlen(m_entry);
+                s32 cx = x + 20;
+                for (size_t i = 0; i < 16; i++) {
+                    if (i && i % 4 == 0) cx += 14;
+                    const char c[2] = {i < len ? m_entry[i] : '-', 0};
+                    r->drawString(c, false, cx, y + 95, 30, r->a(i < len ? White : Grey));
+                    cx += 22;
+                }
+                for (u32 k = 0; k < KeyCount; k++) {
+                    s32 kx, ky, kw, kh;
+                    KeyRect(k, &kx, &ky, &kw, &kh);
+                    const bool sel = k == m_sel && !m_touch;
+                    const bool off = k == JoinKey && len != 16;
+                    if (sel) r->drawRect(kx - 2, ky - 2, kw + 4, kh + 4, r->a(Selected));  // a 2-pixel border
+                    r->drawRect(kx, ky, kw, kh, r->a(KeyFill));
+                    const char *label = KeyLabel(k);
+                    const u32 size = k < 16 ? 30 : 20;
+                    const s32 tw = TextWidth(r, label, size);
+                    r->drawString(label, false, kx + (kw - tw) / 2, ky + kh / 2 + static_cast<s32>(size) * 7 / 20, size, r->a(off ? Grey : White));
+                }
+                if (m_msg[0]) {
+                    r->drawString(m_msg, false, x + 20, KeysBottom() + 35, 15, r->a(m_msg_problem ? Red : Grey));
+                } else if (g_status_ok && g_status.nwid) {
+                    char now[48];
+                    std::snprintf(now, sizeof now, "Now: %016llx", static_cast<unsigned long long>(g_status.nwid));
+                    r->drawString(now, false, x + 20, KeysBottom() + 35, 15, r->a(Grey));
+                }
+            }
+
+            void layout(u16, u16, u16, u16) override {}
+
+            tsl::elm::Element *requestFocus(tsl::elm::Element *, tsl::FocusDirection) override { return this; }
+
+            // Not Tesla's focus look: the selected key shows instead.
+            void drawFocusBackground(tsl::gfx::Renderer *) override {}
+            void drawHighlight(tsl::gfx::Renderer *) override {}
+
+            bool handleInput(u64 down, u64 held, const HidTouchState &, HidAnalogStickState, HidAnalogStickState) override {
+                if (down & (HidNpadButton_A | HidNpadButton_Y | HidNpadButton_Plus | HidNpadButton_AnyUp | HidNpadButton_AnyDown | HidNpadButton_AnyLeft |
+                            HidNpadButton_AnyRight)) m_touch = false;
+                if (down & HidNpadButton_A) {
+                    Press(m_sel);
+                    return true;
+                }
+                if (down & HidNpadButton_Y) {
+                    Press(DeleteKey);
+                    return true;
+                }
+                if (down & HidNpadButton_Plus) {
+                    Press(JoinKey);
+                    return true;
+                }
+                // The D-pad moves the selection, repeating while held.
+                const int dx = (held & HidNpadButton_AnyRight ? 1 : 0) - (held & HidNpadButton_AnyLeft ? 1 : 0);
+                const int dy = (held & HidNpadButton_AnyDown ? 1 : 0) - (held & HidNpadButton_AnyUp ? 1 : 0);
+                if (dx == 0 && dy == 0) {
+                    m_repeat = 0;
+                    return false;
+                }
+                if (m_repeat == 0 || (m_repeat > 20 && m_repeat % 6 == 0)) Move(dx, dy);
+                m_repeat++;
+                return true;
+            }
+
+            bool onTouch(tsl::elm::TouchEvent event, s32 cx, s32 cy, s32, s32, s32 ix, s32 iy) override {
+                const s32 k = KeyAt(cx, cy);
+                if (k < 0) return false;
+                m_touch = true;
+                // A tap: released on the key it began on.
+                if (event == tsl::elm::TouchEvent::Release && KeyAt(ix, iy) == k) {
+                    m_sel = static_cast<u32>(k);
+                    Press(m_sel);
+                }
+                return true;
+            }
+
+        private:
+            static constexpr u32 KeyCount = 18, DeleteKey = 16, JoinKey = 17;
+            static constexpr s32 KeysTop = 125, KeyGap = 8, KeyHeight = 50;
+            static constexpr tsl::Color Selected{0x0, 0xC, 0xF, 0xF};
+            static constexpr tsl::Color KeyFill{0x3, 0x3, 0x3, 0xF};
+
+            static const char *KeyLabel(u32 k) {
+                static const char *const hex[16] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"};
+                return k < 16 ? hex[k] : k == DeleteKey ? "Delete" : "Join";
+            }
+
+            // 4 rows of 4 hex keys, then Delete and Join, two columns each.
+            void KeyRect(u32 k, s32 *kx, s32 *ky, s32 *kw, s32 *kh) {
+                const s32 left = getX() + 20, width = getWidth() - 40;
+                const s32 col_w = (width - 3 * KeyGap) / 4;
+                const u32 row = k < 16 ? k / 4 : 4;
+                const u32 col = k < 16 ? k % 4 : (k == DeleteKey ? 0 : 2);
+                const u32 span = k < 16 ? 1 : 2;
+                *kx = left + static_cast<s32>(col) * (col_w + KeyGap);
+                *ky = getY() + KeysTop + static_cast<s32>(row) * (KeyHeight + KeyGap);
+                *kw = col_w * static_cast<s32>(span) + KeyGap * static_cast<s32>(span - 1);
+                *kh = KeyHeight;
+            }
+
+            s32 KeysBottom() { return getY() + KeysTop + 5 * (KeyHeight + KeyGap); }
+
+            s32 KeyAt(s32 px, s32 py) {
+                for (u32 k = 0; k < KeyCount; k++) {
+                    s32 kx, ky, kw, kh;
+                    KeyRect(k, &kx, &ky, &kw, &kh);
+                    if (px >= kx && px < kx + kw && py >= ky && py < ky + kh) return static_cast<s32>(k);
+                }
+                return -1;
+            }
+
+            // Row and column on a 4 x 5 grid; the last row has two wide keys.
+            void Move(int dx, int dy) {
+                u32 row = m_sel < 16 ? m_sel / 4 : 4;
+                u32 col = m_sel < 16 ? m_sel % 4 : (m_sel == DeleteKey ? 0 : 2);
+                if (dx) {
+                    const u32 step = row == 4 ? 2 : 1;
+                    col = (col + (dx > 0 ? step : 4 - step)) % 4;
+                }
+                if (dy) row = (row + (dy > 0 ? 1 : 4)) % 5;
+                m_sel = row < 4 ? row * 4 + col : (col < 2 ? DeleteKey : JoinKey);
+            }
+
+            void Press(u32 k) {
+                m_msg[0] = 0;
+                const size_t len = std::strlen(m_entry);
+                if (k < 16) {
+                    if (len < 16) {
+                        m_entry[len] = KeyLabel(k)[0];
+                        m_entry[len + 1] = 0;
+                    }
+                    if (len + 1 >= 16) m_sel = JoinKey;  // done: Join is next
+                } else if (k == DeleteKey) {
+                    if (len) m_entry[len - 1] = 0;
+                } else if (len != 16) {
+                    Say("Enter all 16 characters first.", true);
+                } else {
+                    Join();
+                }
+            }
+
+            void Join() {
+                const u64 nwid = std::strtoull(m_entry, nullptr, 16);
+                if (nwid == 0) {
+                    Say("That isn't a network ID.", true);
+                    return;
+                }
+                if (!SaveNetwork(nwid)) {
+                    Say("Couldn't save config.ini on the SD card.", true);
+                    return;
+                }
+                if (g_have_ctl && g_status_ok) {
+                    ctl::g_set_network = nwid;
+                    ctl::Wake();
+                    Note("Joining the network.", "Authorize this Switch if it asks.");
+                } else {
+                    Note("Saved. zerotier-nx joins it when", "it next starts.");
+                }
+                tsl::goBack();
+            }
+
+            void Say(const char *text, bool problem) {
+                std::snprintf(m_msg, sizeof m_msg, "%s", text);
+                m_msg_problem = problem;
+            }
+
+            char m_entry[17];
+            char m_msg[64];
+            bool m_msg_problem = false;
+            u32 m_sel = 0;
+            u32 m_repeat = 0;
+            bool m_touch = false;
+    };
+
+    class NetworkIdGui : public tsl::Gui {
+        public:
+            tsl::elm::Element *createUI() override {
+                auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Network ID");
+                frame->setContent(new Keypad());
+                return frame;
+            }
+
+            void update() override {
+                if (++m_frames % 30 != 0) return;
+                Poll();
+                Refresh();
+            }
+
+        private:
+            u32 m_frames = 0;
+    };
+
     class NetworkGui : public tsl::Gui {
         public:
             tsl::elm::Element *createUI() override {
                 auto *frame = new tsl::elm::OverlayFrame("ZeroTier", "Network");
                 auto *list = new tsl::elm::List();
                 list->addItem(new Drawer(DrawNetwork), 250);
+                auto *change = new tsl::elm::ListItem(g_status_ok && g_status.nwid ? "Change network" : "Enter network ID");
+                change->setClickListener([](u64 keys) {
+                    if (!(keys & HidNpadButton_A)) return false;
+                    tsl::changeTo<NetworkIdGui>();
+                    return true;
+                });
+                list->addItem(change);
                 list->addItem(new Drawer([](tsl::gfx::Renderer *r, s32 x, s32 y, s32, s32) {
-                    r->drawString("The network is set with network= in", false, x + 20, y + 25, 15, r->a(Grey));
+                    r->drawString("The network is kept as network= in", false, x + 20, y + 25, 15, r->a(Grey));
                     r->drawString("config/zerotier-nx/config.ini.", false, x + 20, y + 47, 15, r->a(Grey));
                 }), 70);
                 frame->setContent(list);
@@ -1155,7 +1470,9 @@ namespace {
                 m_net = new tsl::elm::ListItem("Network", NetValue());
                 m_net->setClickListener([](u64 keys) {
                     if (!(keys & HidNpadButton_A)) return false;
-                    tsl::changeTo<NetworkGui>();
+                    // None yet: straight to entering one.
+                    if (g_status_ok && !g_status.nwid) tsl::changeTo<NetworkIdGui>();
+                    else tsl::changeTo<NetworkGui>();
                     return true;
                 });
                 list->addItem(m_net);
@@ -1234,7 +1551,8 @@ namespace {
 
             // The network's name once its controller has said it, else its ID.
             static std::string NetValue() {
-                if (!g_status_ok || !g_status.nwid) return "";
+                if (!g_status_ok) return "";
+                if (!g_status.nwid) return "Enter ID";
                 if (g_net_name[0]) return g_net_name;
                 char id[20];
                 std::snprintf(id, sizeof id, "%016llx", static_cast<unsigned long long>(g_status.nwid));

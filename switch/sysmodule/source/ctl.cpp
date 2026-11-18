@@ -12,7 +12,8 @@
     AMS_SF_METHOD_INFO(C, H, 2, Result, GetLastError, (const sf::OutBuffer &msg, sf::Out<u32> out_len),       (msg, out_len))          \
     AMS_SF_METHOD_INFO(C, H, 3, Result, Stop,         (sf::Out<u32> out_code, sf::Out<u32> out_detail),       (out_code, out_detail))  \
     AMS_SF_METHOD_INFO(C, H, 4, Result, GetPeers,     (const sf::OutBuffer &peers, sf::Out<u32> out_count),   (peers, out_count))      \
-    AMS_SF_METHOD_INFO(C, H, 5, Result, GetNetworkName, (const sf::OutBuffer &name, sf::Out<u32> out_len),    (name, out_len))
+    AMS_SF_METHOD_INFO(C, H, 5, Result, GetNetworkName, (const sf::OutBuffer &name, sf::Out<u32> out_len),    (name, out_len))  \
+    AMS_SF_METHOD_INFO(C, H, 6, Result, SetNetwork,   (u64 nwid),                                             (nwid))
 
 AMS_SF_DEFINE_INTERFACE(ams::ctl, ICtl, ZTNX_CTL_INTERFACE_INFO, 0x7767636C)
 
@@ -58,6 +59,12 @@ namespace ams::ctl {
             Result GetNetworkName(const sf::OutBuffer &name, sf::Out<u32> out_len) {
                 const size_t n = status::GetNetworkName(reinterpret_cast<char *>(name.GetPointer()), name.GetSize());
                 out_len.SetValue(static_cast<u32>(n));
+                R_SUCCEED();
+            }
+
+            // Joined by the main or engine thread (ZeroTier runs only there).
+            Result SetNetwork(u64 nwid) {
+                status::RequestNetwork(nwid);
                 R_SUCCEED();
             }
     };

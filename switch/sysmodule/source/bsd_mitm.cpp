@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "bsd_mitm.hpp"
+#include "hosts.hpp"
 #include "log.hpp"
 #include "runtime.hpp"
 #include "stack_watch.hpp"
@@ -600,6 +601,11 @@ namespace ams::bsd_mitm {
                 R_UNLESS(Known(fd) && sa != nullptr && (tunnel || Virtual(fd)), sm::mitm::ResultShouldForwardToSession());
                 if (tunnel && status::IsPaused()) R_RETURN(Reply(out_ret, out_errno, VResult{-1, WireENetUnreach}));
                 const VResult r = V()->Connect(fd, sa, static_cast<socklen_t>(addr.GetSize()));
+                if (tunnel && sa->sa_family == AF_INET) {
+                    // A Moonlight host added by its address (see hosts.hpp).
+                    const auto *in = reinterpret_cast<const sockaddr_in *>(sa);
+                    hosts::LearnGameStreamHost(ntohl(in->sin_addr.s_addr), ntohs(in->sin_port));
+                }
                 if (tunnel) {
                     char dst[64];
                     FormatAddr(sa, dst, sizeof dst);

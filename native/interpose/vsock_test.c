@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdio.h>
@@ -278,6 +279,50 @@ static int udp_mmsg(void) {
     CHECK(seen == (1 << N) - 1, "all three echoed back intact");
     return 1;
 }
+
+// A Moonlight host added by its address: once an app has connected to its
+// GameStream port through the tunnel, the address itself resolves to its
+// stand-in in 100.127.0.0/16 (the sysmodule names it in Atmosphère's hosts
+// file), and the stand-in reaches the peer.
+static int gamestream_standin(void) {
+    struct sockaddr_in gs = peer;
+    gs.sin_port = htons(47989);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(fd >= 0, "socket");
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    connect(fd, (struct sockaddr *)&gs, sizeof gs);  // refused or not, it counts
+    wait_fd(fd, POLLOUT, 3000);
+    close(fd);
+    char ip[16];
+    inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof ip);
+    const uint32_t want = 0x647F0000u | (ntohl(peer.sin_addr.s_addr) & 0xffffu);
+    uint32_t got = 0;
+    // The sysmodule's engine loop writes the hosts file; Atmosphère reloads.
+    for (int i = 0; i < 40 && got != want; i++) {
+        struct addrinfo hints = {0}, *res = NULL;
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        if (getaddrinfo(ip, NULL, &hints, &res) == 0 && res) {
+            got = ntohl(((struct sockaddr_in *)res->ai_addr)->sin_addr.s_addr);
+            freeaddrinfo(res);
+        }
+        if (got != want) usleep(250 * 1000);
+    }
+    printf("  %s resolves to %u.%u.%u.%u\n", ip, got >> 24, (got >> 16) & 0xff, (got >> 8) & 0xff, got & 0xff);
+    CHECK(got == want, "the address resolves to its stand-in");
+    struct sockaddr_in alias = peer;
+    alias.sin_addr.s_addr = htonl(want);
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(fd >= 0, "socket");
+    CHECK(connect(fd, (struct sockaddr *)&alias, sizeof alias) == 0, "connect to the stand-in");
+    CHECK(write(fd, "standin", 7) == 7, "write");
+    char buf[16];
+    CHECK(wait_fd(fd, POLLIN, 3000) & POLLIN, "echo arrives");
+    const ssize_t n = read(fd, buf, sizeof buf);
+    CHECK(n == 7 && memcmp(buf, "standin", 7) == 0, "echo through the stand-in");
+    close(fd);
+    return 1;
+}
 #endif
 
 static int passthrough(const char *target) {
@@ -320,6 +365,7 @@ int main(int argc, char **argv) {
     report("udp bound to wildcard", udp_bound_any());
 #ifdef __SWITCH__
     report("udp sendmmsg/recvmmsg, large slots", udp_mmsg());
+    report("gamestream host by address: stand-in", gamestream_standin());
 #endif
     if (argc > 2) report("pass-through outside the tunnel", passthrough(argv[2]));
     printf(failures ? "%d test(s) failed\n" : "all vsock tests passed\n", failures);

@@ -40,6 +40,15 @@ namespace ams::status {
     // Something the user has to fix before anything can work (no network=
     // in config.ini, no identity): kept for the overlay, with a toast.
     void SetConfigError(const char *message);
+    // First boot: waiting to make this Switch's identity, or making it.
+    void SetMakingIdentity(bool making);
+    // A network the overlay asked to join (ztnx:ctl SetNetwork, any thread),
+    // and taking it (main or engine thread): 0 if none is waiting.
+    void RequestNetwork(u64 nwid);
+    u64 TakeNetworkRequest();
+    // Now joining nwid instead (main or engine thread): what was known
+    // about the old network, and the missing network= error, are dropped.
+    void ChangeNetwork(u64 nwid);
     // The network as ZeroTier reports it (engine thread, no lock held):
     // CONNECTED once it is up with an address, with a toast the first time;
     // a toast saying what to do when the controller refuses us.

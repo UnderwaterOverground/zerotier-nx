@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <memory>
 
@@ -211,11 +212,11 @@ namespace ams::hosts {
 
     }
 
-    bool Collect(const char *names, const ZtnxNetConfig &net, bool aliases) {
+    bool Collect(const char *names, const char *learned, const ZtnxNetConfig &net, bool aliases) {
         // Runs rarely: working buffers come from the heap, not static memory.
         auto lines = std::make_unique<char[]>(MaxBlock);
         auto block = std::make_unique<char[]>(MaxBlock);
-        util::SNPrintf(lines.get(), MaxBlock, "%s", names);
+        util::SNPrintf(lines.get(), MaxBlock, "%s%s", names, learned);
         if (aliases) Alias(net, lines.get(), MaxBlock);
         else ::ztnx::VSock::SetAliases(nullptr, 0);
         int count = 0;
@@ -228,6 +229,34 @@ namespace ams::hosts {
         g_block_count = count;
         g_block_hash = hash;
         return true;
+    }
+
+    namespace {
+
+        constexpr size_t LearnSlots = 8;
+        constinit std::atomic<u32> g_learn_slots[LearnSlots] = {};
+
+    }
+
+    void LearnGameStreamHost(uint32_t ip, uint16_t port) {
+        if (port != 47984 && port != 47989) return;
+        if (::ztnx::VSock::AliasFor(ip) == 0) return;  // not private, or a stand-in already
+        for (auto &slot : g_learn_slots) {
+            if (slot.load(std::memory_order_relaxed) == ip) return;
+        }
+        for (auto &slot : g_learn_slots) {
+            u32 empty = 0;
+            if (slot.compare_exchange_strong(empty, ip)) return;
+        }
+    }
+
+    size_t TakeLearned(uint32_t *out, size_t max) {
+        size_t n = 0;
+        for (auto &slot : g_learn_slots) {
+            if (n == max) break;
+            if (const u32 ip = slot.exchange(0)) out[n++] = ip;
+        }
+        return n;
     }
 
     void Write() {

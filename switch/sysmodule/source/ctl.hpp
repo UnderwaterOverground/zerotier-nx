@@ -1,5 +1,6 @@
-// ztnx:ctl: status, peers, pause and stop for clients like the
-// overlay (see native/ctl/ztnx_ctl.h). Runs on its own small server thread.
+// ztnx:ctl: status, peers, pause, stop and the network to join, for
+// clients like the overlay (see native/ctl/ztnx_ctl.h). Runs on its own
+// small server thread.
 #pragma once
 
 #include <stratosphere.hpp>

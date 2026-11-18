@@ -765,6 +765,9 @@ namespace ams {
         // identity.secret made on a PC to appear).
         u64 EnsureIdentity() {
             if (const u64 addr = LoadIdentity()) return addr;
+            // The overlay says so meanwhile, instead of a bare "Starting".
+            status::SetMakingIdentity(true);
+            ON_SCOPE_EXIT { status::SetMakingIdentity(false); };
             const u64 entered = armTicksToNs(armGetSystemTick());
             bool healthy = false;
             Log("identity: none yet; one is made %llu s after power-on, when %llu MB of system memory is free",
@@ -810,6 +813,64 @@ namespace ams {
         constinit bool g_aliases_on = true;
         constinit std::atomic<bool> g_hosts_due = false;  // Collect() ran; Write() pending
 
+        // GameStream hosts reached by address (hosts::LearnGameStreamHost),
+        // as "a.b.c.d a.b.c.d\n" lines: each named as itself, so the hosts
+        // file resolves the address to its stand-in. Engine thread only;
+        // forgotten when the network changes (and at reboot: Moonlight asks
+        // the PC for its state again first).
+        constexpr size_t MaxLearnedHosts = 8;
+        constinit char g_learned_lines[MaxLearnedHosts * 34] = {};
+        constinit size_t g_learned_count = 0;
+        // The network's configuration as last reported, to rebuild the
+        // hosts block with when a host is learned.
+        constinit ZtnxNetConfig g_last_net = {};
+
+        void CollectHosts() {
+            if (!g_hosts_on || g_last_net.status != ZTNX_NET_OK || !g_last_net.n_addrs) return;
+            g_hosts_due = hosts::Collect(g_host_lines, g_learned_lines, g_last_net, g_aliases_on) || g_hosts_due.load();
+        }
+
+        void ForgetLearnedHosts() {
+            g_learned_lines[0] = 0;
+            g_learned_count = 0;
+            g_last_net = {};
+        }
+
+        // Whether "a.b.c.d " starts a line of `lines`.
+        bool HasLineFor(const char *lines, const char *ip) {
+            const size_t n = std::strlen(ip);
+            for (const char *p = lines; *p;) {
+                if (std::strncmp(p, ip, n) == 0 && p[n] == ' ') return true;
+                const char *eol = std::strchr(p, '\n');
+                if (!eol) break;
+                p = eol + 1;
+            }
+            return false;
+        }
+
+        void TakeLearnedHosts() {
+            u32 ips[8];
+            const size_t n = hosts::TakeLearned(ips, util::size(ips));
+            if (n == 0 || !g_hosts_on || !g_aliases_on) return;
+            bool added = false;
+            for (size_t i = 0; i < n; i++) {
+                char ip[16];
+                util::SNPrintf(ip, sizeof ip, "%u.%u.%u.%u", ips[i] >> 24, (ips[i] >> 16) & 0xff, (ips[i] >> 8) & 0xff, ips[i] & 0xff);
+                // Named in config.ini already, or learned already.
+                if (HasLineFor(g_host_lines, ip) || HasLineFor(g_learned_lines, ip)) continue;
+                if (g_learned_count == MaxLearnedHosts) {
+                    Log("hosts: %s is a GameStream host, but %zu are named already", ip, MaxLearnedHosts);
+                    continue;
+                }
+                const size_t used = std::strlen(g_learned_lines);
+                util::SNPrintf(g_learned_lines + used, sizeof g_learned_lines - used, "%s %s\n", ip, ip);
+                g_learned_count++;
+                added = true;
+                Log("hosts: %s is a GameStream host reached by its address; naming it after its stand-in", ip);
+            }
+            if (added) CollectHosts();
+        }
+
         const char *NetStatusName(u32 status) {
             switch (status) {
                 case ZTNX_NET_REQUESTING: return "asking the controller";
@@ -833,7 +894,8 @@ namespace ams {
             Log("network %016llx: %s; address %s, mtu %u, %u route(s)%s%s", static_cast<unsigned long long>(c.nwid), NetStatusName(c.status), ip, c.mtu, c.n_routes,
                 c.truncated ? "; its configuration didn't all fit" : "", c.status == ZTNX_NET_OK && !c.broadcast ? "; broadcast is off (ARP won't work)" : "");
             status::SetNetwork(c);
-            if (g_hosts_on && c.status == ZTNX_NET_OK && c.n_addrs) g_hosts_due = hosts::Collect(g_host_lines, c, g_aliases_on) || g_hosts_due.load();
+            g_last_net = c;
+            CollectHosts();
             StartUdpLog();
         }
 
@@ -1201,6 +1263,11 @@ namespace ams {
             Log("socketInitialize failed: 0x%x", rc.GetValue());
             return;
         }
+        // The overlay's service, from the start: on a first boot it can say
+        // why nothing has happened yet (the identity waits ~2 minutes) and
+        // take the network to join while the rest waits. Stop answers "busy"
+        // until the engine runs.
+        ctl::Start(StopForOverlay);
 
         Config cfg;
         LoadConfig(cfg);
@@ -1266,8 +1333,8 @@ namespace ams {
         u64 nwid = std::strtoull(cfg.network, &nwid_end, 16);
         if (std::strlen(cfg.network) != 16 || *nwid_end || nwid == 0) {
             nwid = 0;
-            Log("config: no network= (16 hex digits) in %s; nothing to join", ConfigPath);
-            status::SetConfigError("Add network=<your 16-digit network ID> to config/zerotier-nx/config.ini and restart.");
+            Log("config: no network= (16 hex digits) in %s; nothing to join until one is entered in the overlay", ConfigPath);
+            status::SetConfigError("Open ZeroTier in Ultrahand (L + D-pad Down + R3), select Network and enter your network's ID.");
         }
         // First boot: this waits until the console has settled, then makes
         // the identity (see EnsureIdentity).
@@ -1331,6 +1398,12 @@ namespace ams {
         link->SetLocalIp(ip);
         status::SetNode(link->Address(), nwid);
         Log("zerotier: node %010llx%s", static_cast<unsigned long long>(link->Address()), link->Address() != node ? " (not the identity just read?)" : "");
+        // Entered in the overlay while the identity was being made.
+        if (const u64 asked = status::TakeNetworkRequest(); asked && asked != nwid) {
+            Log("network %016llx: entered in the overlay", static_cast<unsigned long long>(asked));
+            nwid = asked;
+            status::ChangeNetwork(nwid);
+        }
         if (nwid) {
             Log("joining network %016llx", static_cast<unsigned long long>(nwid));
             link->Join(nwid);
@@ -1366,7 +1439,6 @@ namespace ams {
         // the engine loop's first round), then its control service.
         status::Initialize(*rt, (mitm ? ZTNX_CTL_FLAG_MITM : 0) | (g_hosts_on ? ZTNX_CTL_FLAG_HOSTS : 0),
                            std::strcmp(cfg.connect_notice, "off") != 0);
-        ctl::Start(StopForOverlay);
 
         // Engine loop on this thread; housekeeping between rounds, without
         // the runtime lock (homebrew's sockets don't wait for it). Re-detect
@@ -1496,6 +1568,16 @@ namespace ams {
                     if (cur) link->NetworkChanged(cur);
                 }
             }
+            // A network entered in the overlay (which has saved it in
+            // config.ini): joining it leaves the current one.
+            if (const u64 asked = status::TakeNetworkRequest(); asked && asked != nwid) {
+                Log("network %016llx: entered in the overlay; joining it%s", static_cast<unsigned long long>(asked), nwid ? " instead" : "");
+                nwid = asked;
+                ForgetLearnedHosts();
+                status::ChangeNetwork(nwid);
+                link->Join(nwid);
+            }
+            TakeLearnedHosts();
             if (g_hosts_due.exchange(false)) Timed("hosts file update", [] { hosts::Write(); });
             std::scoped_lock lk(g_log_mutex);
             EmitDeferredLog();

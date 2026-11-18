@@ -29,7 +29,9 @@ namespace ams::status {
 
         constinit os::SdkMutex g_mutex;
         constinit ::ztnx::Runtime *g_runtime = nullptr;
-        constinit ZtnxCtlStatus g_status = {};
+        // The version from the start: ztnx:ctl answers before Initialize.
+        constinit ZtnxCtlStatus g_status = {.version = ZTNX_CTL_VERSION};
+        constinit std::atomic<u64> g_requested_nwid = 0;
         constinit char g_last_error[192] = {};
         constinit char g_net_name[ZTNX_CTL_NAME_MAX] = {};
         constinit ZtnxCtlPeer g_peers[ZTNX_CTL_MAX_PEERS] = {};
@@ -144,6 +146,35 @@ namespace ams::status {
         Toast(ConfigNotifyPath, "ZeroTier: setup needed", text, ConfigToastMs);
     }
 
+    void SetMakingIdentity(bool making) {
+        std::scoped_lock lk(g_mutex);
+        if (making) g_status.flags |= ZTNX_CTL_FLAG_MAKING_ID;
+        else g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_MAKING_ID);
+    }
+
+    void RequestNetwork(u64 nwid) {
+        if (nwid != 0) g_requested_nwid = nwid;
+    }
+
+    u64 TakeNetworkRequest() {
+        return g_requested_nwid.exchange(0);
+    }
+
+    void ChangeNetwork(u64 nwid) {
+        std::scoped_lock lk(g_mutex);
+        g_status.nwid = nwid;
+        g_status.flags &= ~static_cast<u32>(ZTNX_CTL_FLAG_CONF_ERROR);
+        g_status.net_status = ZTNX_CTL_NET_REQUESTING;
+        g_status.truncated = 0;
+        std::memset(g_status.ipv4, 0, sizeof g_status.ipv4);
+        g_net_ok = false;
+        g_net_name[0] = 0;
+        g_last_error[0] = 0;
+        g_announced_net = -1;
+        g_announced_truncated = false;
+        if (g_runtime && !g_paused && g_status.state != ZTNX_CTL_STOPPING) g_status.state = RunningState();
+    }
+
     void SetNetwork(const ZtnxNetConfig &c) {
         char title[48] = {}, text[200] = {};
         u32 toast_ms = 0;
@@ -170,7 +201,7 @@ namespace ams::status {
                         util::SNPrintf(title, sizeof title, "ZeroTier: not authorized yet");
                         break;
                     case ZTNX_NET_NOT_FOUND:
-                        util::SNPrintf(g_last_error, sizeof g_last_error, "There is no network %016llx. Check network= in config/zerotier-nx/config.ini.",
+                        util::SNPrintf(g_last_error, sizeof g_last_error, "There is no network %016llx. Check its ID: select Network in the ZeroTier overlay.",
                                        static_cast<unsigned long long>(g_status.nwid));
                         util::SNPrintf(title, sizeof title, "ZeroTier: network not found");
                         break;

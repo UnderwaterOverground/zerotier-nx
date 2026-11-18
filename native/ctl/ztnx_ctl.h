@@ -15,6 +15,10 @@
 //          count is how many there are, which can be more than were written.
 //   cmd 5  GetNetworkName(out buffer) -> u32 length: the joined network's
 //          name as its controller gave it, "" until then.
+//   cmd 6  SetNetwork(u64 nwid): join this network now, leaving the one
+//          joined (if any). Doesn't touch config.ini: the overlay writes
+//          that. 0 is ignored. Sent before the engine has started (the
+//          first boot's wait for the identity), it is joined once it has.
 #pragma once
 #include <stdint.h>
 
@@ -50,6 +54,7 @@ enum {
     ZTNX_CTL_FLAG_OFFLINE = 4,     // the console has no internet connection
     ZTNX_CTL_FLAG_CONF_ERROR = 8,  // config.ini names no network (GetLastError says what to do)
     ZTNX_CTL_FLAG_NO_ROOTS = 16,   // ZeroTier's root servers don't answer (UDP blocked?)
+    ZTNX_CTL_FLAG_MAKING_ID = 32,  // first boot: waiting to make this Switch's identity, or making it
 };
 
 // net_status: where joining the network stands (the values of

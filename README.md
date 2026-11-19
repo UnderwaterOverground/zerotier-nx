@@ -198,3 +198,8 @@ See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party licences.
 ## Licence
 
 The sysmodule, overlay and socket layer are GPL-2.0-or-later ([LICENSE](LICENSE)). The Rust code under `crates/` is BSD-3-Clause ([crates/LICENSE](crates/LICENSE)). ZeroTier's core is MPL-2.0; the changes made to it are in `patches/` and listed in [VENDORED.md](VENDORED.md).
+
+## Found it useful?
+
+If zerotier-nx helped you, a ⭐ on the repo is always appreciated. It's how
+we know it's helping someone.

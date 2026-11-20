@@ -460,13 +460,16 @@ namespace ams {
             return R_SUCCEEDED(nifmGetCurrentIpAddress(&ip)) ? ip : 0;
         }
 
-        // Tells the MITM our LAN (its addresses are reached directly).
-        void SetLocalNet(u32 ip) {
+        // Tells the MITM our LAN (its addresses are reached directly unless
+        // a route is more specific) and logs it.
+        void SetLocalNet(u32 ip, const char *what) {
             u32 cur = 0, mask = 0, gw = 0, dns1 = 0, dns2 = 0;
             unsigned len = 32;
             if (ip && R_SUCCEEDED(nifmGetCurrentIpConfigInfo(&cur, &mask, &gw, &dns1, &dns2)) && cur == ip) {
                 len = static_cast<unsigned>(__builtin_popcount(mask));
             }
+            if (ip) Log("%s, local address %s/%u", what, inet_ntoa(in_addr{ip}), len);
+            else Log("%s: offline", what);
             ::ztnx::VSock::SetLocalNet(ntohl(ip), len);
         }
 
@@ -1306,8 +1309,7 @@ namespace ams {
             }
         }
         u32 ip = CurrentIp();
-        Log("network up, local address %s", inet_ntoa(in_addr{ip}));
-        SetLocalNet(ip);
+        SetLocalNet(ip, "network up");
 
         // Consoles often have wrong clocks (dead RTC, Nintendo's NTP blocked):
         // TLS (the update check) needs a plausible date, and ZeroTier's own
@@ -1562,9 +1564,8 @@ namespace ams {
                 status::SetOffline(cur == 0);
                 if (cur && g_log_udp_lost.exchange(false)) StartUdpLog();
                 if (cur != ip) {
-                    Log("local address changed: %s", cur ? inet_ntoa(in_addr{cur}) : "(offline)");
                     ip = cur;
-                    SetLocalNet(cur);
+                    SetLocalNet(cur, "network changed");
                     link->SetLocalIp(cur);
                     if (cur) link->NetworkChanged(cur);
                 }

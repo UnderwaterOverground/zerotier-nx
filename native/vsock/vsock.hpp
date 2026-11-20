@@ -108,13 +108,18 @@ public:
     // Whether addr goes through the tunnel: inside one of the routes
     // (SetRoutes: our own subnets and the network's managed routes), except
     // addresses on our own LAN (SetLocalNet), which are reached directly as
-    // with any on-link route, and special ones (loopback, link-local,
+    // with any on-link route (unless the LAN holds one of our own network
+    // addresses, SetOwnAddrs: then the longer prefix wins, ties going to the
+    // LAN), and special ones (loopback, link-local,
     // multicast, broadcast), which a 0.0.0.0/0 route would otherwise take.
     static bool IsTunnel(const sockaddr *addr);
     // The network's routes (see ZtLink), whenever its configuration changes. At most
     // MaxRoutes are used.
     static constexpr size_t MaxRoutes = 64;
     static void SetRoutes(const ZtnxPrefix *routes, size_t n);
+    // Our own network addresses (only IPv4 ones are kept), with the routes.
+    static constexpr size_t MaxOwnAddrs = 4;
+    static void SetOwnAddrs(const ZtnxPrefix *addrs, size_t n);
     // Our LAN: IPv4 address (host byte order; 0 = offline) and prefix length.
     static void SetLocalNet(uint32_t ip, unsigned len);
     // Test knob: send LAN addresses through the tunnel too when a route

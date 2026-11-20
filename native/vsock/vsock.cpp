@@ -92,6 +92,8 @@ ZtnxPrefix g_routes[VSock::MaxRoutes];
 size_t g_num_routes = 0;
 uint32_t g_local_ipv4 = 0;
 unsigned g_local_len = 32;
+uint32_t g_own[VSock::MaxOwnAddrs];  // our network addresses (host byte order)
+size_t g_num_own = 0;
 bool g_tunnel_lan = false;
 VSock::Alias g_aliases[VSock::MaxAliases];
 size_t g_num_aliases = 0;
@@ -121,6 +123,17 @@ void VSock::SetRoutes(const ZtnxPrefix *routes, size_t n) {
     std::lock_guard<std::mutex> lock(g_routes_mu);
     g_num_routes = std::min(n, MaxRoutes);
     if (g_num_routes) std::memcpy(g_routes, routes, g_num_routes * sizeof *routes);
+}
+
+void VSock::SetOwnAddrs(const ZtnxPrefix *addrs, size_t n) {
+    std::lock_guard<std::mutex> lock(g_routes_mu);
+    g_num_own = 0;
+    for (size_t i = 0; i < n && g_num_own < MaxOwnAddrs; i++) {
+        if (addrs[i].family != 4) continue;
+        uint32_t be;
+        std::memcpy(&be, addrs[i].ip, 4);
+        g_own[g_num_own++] = ntohl(be);
+    }
 }
 
 void VSock::SetLocalNet(uint32_t ip, unsigned len) {
@@ -220,17 +233,28 @@ bool VSock::IsTunnel(const sockaddr *addr) {
         for (size_t i = 0; i < g_num_aliases; i++)
             if (g_aliases[i].alias == v4 && !AliasOnLan(v4)) return true;  // a stand-in: always the tunnel
     }
-    if (family == 4 && g_local_ipv4 && !g_tunnel_lan) {
-        uint8_t local[4];
-        const uint32_t local_be = htonl(g_local_ipv4);
-        std::memcpy(local, &local_be, 4);
-        if (PrefixMatch(ip, local, g_local_len)) return false;  // on our LAN: direct
-    }
+    int best = -1;  // the longest route covering ip
     for (size_t i = 0; i < g_num_routes; i++) {
         const ZtnxPrefix &r = g_routes[i];
-        if (r.family == family && r.len <= (family == 4 ? 32 : 128) && PrefixMatch(ip, r.ip, r.len)) return true;
+        if (r.family == family && r.len <= (family == 4 ? 32 : 128) && r.len > best && PrefixMatch(ip, r.ip, r.len)) best = r.len;
     }
-    return false;
+    if (best < 0) return false;
+    if (family == 4 && g_local_ipv4 && !g_tunnel_lan) {
+        const uint32_t mask = g_local_len ? ~0u << (32 - g_local_len) : 0;
+        uint32_t v4;
+        std::memcpy(&v4, ip, 4);
+        if ((ntohl(v4) & mask) == (g_local_ipv4 & mask)) {
+            // On our LAN: direct, even when a route covers it (at home, a
+            // host behind a managed route is reached over Wi-Fi). Unless the
+            // LAN holds our own network address: then it overlaps the network
+            // (a 10.0.0.0/8 LAN around 10.147.17.0/24), and as on any OS the
+            // longer prefix wins, a tie going to the LAN.
+            bool overlaps = false;
+            for (size_t i = 0; i < g_num_own && !overlaps; i++) overlaps = (g_own[i] & mask) == (g_local_ipv4 & mask);
+            if (!overlaps || static_cast<int>(g_local_len) >= best) return false;
+        }
+    }
+    return true;
 }
 
 bool VSock::Get(int fd, VFd *out) {

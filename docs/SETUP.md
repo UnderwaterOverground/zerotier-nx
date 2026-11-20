@@ -171,11 +171,15 @@ example `192.168.1.0/24` via `10.147.17.5`). ZeroTier's guide
 covers the member's side. Nothing needs setting on the Switch: it follows
 the network's routes as they change.
 
-- Addresses on the network the Switch is on are always reached directly,
-  never over ZeroTier, even when a route covers them: at home, Moonlight
-  talks to the PC over Wi-Fi as it always did. Away from home the same
-  addresses go over ZeroTier. Loopback, link-local, multicast and broadcast
-  addresses never go over ZeroTier either.
+- Addresses on the network the Switch is on are reached directly, not over
+  ZeroTier, even when a route covers them: at home, Moonlight talks to the
+  PC over Wi-Fi as it always did. Away from home the same addresses go over
+  ZeroTier. The exception is a Wi-Fi network wide enough to contain the
+  Switch's own ZeroTier address (a `10.0.0.0/8` network around
+  `10.147.17.0/24`, say): the two overlap, and as on a computer the
+  narrower route wins, so ZeroTier addresses still go over ZeroTier.
+  Loopback, link-local, multicast and broadcast addresses never go over
+  ZeroTier.
 - A default route (`0.0.0.0/0`) is ignored: homebrew's internet traffic
   never goes through the network, and the console's own traffic is never
   touched.

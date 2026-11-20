@@ -69,6 +69,7 @@ void ZtLink::Apply(const ZtnxNetConfig &c) {
     const bool up = c.status == ZTNX_NET_OK && c.n_addrs > 0;
     if (!up) {
         VSock::SetRoutes(nullptr, 0);
+        VSock::SetOwnAddrs(nullptr, 0);
         rt_->With([](ZtnxStack *s) { ztnx_l2_down(s); });
         ztnx_engine_multicast_sync(engine_, nullptr, 0);
         return;
@@ -85,8 +86,10 @@ void ZtLink::Apply(const ZtnxNetConfig &c) {
         memcpy(p.ip, ip, 4);
     };
     for (unsigned i = 0; i < c.n_addrs; i++) add(c.addrs[i].ip, c.addrs[i].prefix);
+    const size_t n_own = n;  // our own addresses come first
     for (unsigned i = 0; i < c.n_routes; i++) add(c.routes[i].target, c.routes[i].prefix);
     VSock::SetRoutes(routes, n);
+    VSock::SetOwnAddrs(routes, n_own);
     // ARP requests for our addresses only reach us through these groups.
     uint32_t ips[ZTNX_MAX_ADDRS];
     for (unsigned i = 0; i < c.n_addrs; i++) memcpy(&ips[i], c.addrs[i].ip, 4);

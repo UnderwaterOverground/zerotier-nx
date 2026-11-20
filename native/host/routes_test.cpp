@@ -38,6 +38,34 @@ int main() {
     // A LAN inside a tunnel route only takes its own addresses away.
     VSock::SetLocalNet(ntohl(inet_addr("10.123.0.50")), 25);
     assert(!Routed("10.123.0.9") && Routed("10.123.0.200") && Routed("192.168.1.10"));
+    // A LAN wide enough to hold our own address (10.0.0.0/8 around
+    // 10.7.0.2) overlaps the network: there the longer prefix wins, as on any
+    // OS. The rest of the LAN, and a route as wide as the LAN, stay direct.
+    const ZtnxPrefix own[] = {V4("10.7.0.2", 32)};
+    VSock::SetOwnAddrs(own, 1);
+    VSock::SetLocalNet(ntohl(inet_addr("10.0.0.20")), 8);
+    assert(Routed("10.123.0.9") && Routed("10.7.0.1") && !Routed("10.7.0.9") && !Routed("10.0.0.1"));
+    const ZtnxPrefix wide[] = {V4("10.147.17.0", 24), V4("10.0.0.0", 8)};
+    const ZtnxPrefix own17[] = {V4("10.147.17.2", 24)};
+    VSock::SetRoutes(wide, 2);
+    VSock::SetOwnAddrs(own17, 1);
+    assert(Routed("10.147.17.5") && !Routed("10.0.0.1") && !Routed("10.148.0.1"));
+    // The same on 192.168.0.0/16 around a 192.168.192.0/24 network.
+    const ZtnxPrefix zt192[] = {V4("192.168.192.0", 24)};
+    const ZtnxPrefix own192[] = {V4("192.168.192.2", 24)};
+    VSock::SetRoutes(zt192, 1);
+    VSock::SetOwnAddrs(own192, 1);
+    VSock::SetLocalNet(ntohl(inet_addr("192.168.1.50")), 16);
+    assert(Routed("192.168.192.7") && !Routed("192.168.1.10") && !Routed("192.168.193.7"));
+    // A LAN that doesn't hold our address keeps its hosts direct, even one
+    // behind a narrower managed route (at home, the PC is reached over Wi-Fi).
+    const ZtnxPrefix pc[] = {V4("10.7.0.1", 32), V4("192.168.1.10", 32)};
+    VSock::SetRoutes(pc, 2);
+    VSock::SetOwnAddrs(own, 1);
+    VSock::SetLocalNet(ntohl(inet_addr("192.168.1.50")), 24);
+    assert(!Routed("192.168.1.10") && Routed("10.7.0.1"));
+    VSock::SetOwnAddrs(nullptr, 0);
+    VSock::SetRoutes(routes, 4);
     // Offline: every route is used.
     VSock::SetLocalNet(0, 32);
     assert(Routed("192.168.1.10") && Routed("10.123.0.9"));

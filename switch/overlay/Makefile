@@ -42,7 +42,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 APP_TITLE	:=	ZeroTier
 APP_AUTHOR	:=	UnderwaterOverground
-APP_VERSION :=	1.0.0
+APP_VERSION :=	1.0.1
 
 TARGET		:=	zerotier-nx
 BUILD		:=	build

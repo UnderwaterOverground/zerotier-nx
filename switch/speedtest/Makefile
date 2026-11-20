@@ -45,7 +45,7 @@ INCLUDES	:=	include ../../crates/ztnx-ffi/include
 #ROMFS	:=	romfs
 APP_TITLE	:=	zerotier-nx speedtest
 APP_AUTHOR	:=	UnderwaterOverground
-APP_VERSION	:=	1.0.0
+APP_VERSION	:=	1.0.1
 
 #---------------------------------------------------------------------------------
 # options for code generation

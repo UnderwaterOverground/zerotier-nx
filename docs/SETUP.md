@@ -320,7 +320,7 @@ limit).
 - **The overlay says the sysmodule isn't running.**
   - If it says which firmware this version runs on, the console's firmware
     is newer than that: update zerotier-nx. A new major firmware (24.0,
-    say) needs a new zerotier-nx built for it, which can take a few days
+    say) needs a new zerotier-nx built for it, which normally follows soon
     after Atmosphère supports it; minor updates (23.5 to 23.6) don't.
   - Check that `atmosphere/contents/4200000000005A54/flags/boot2.flag`
     exists.

@@ -167,6 +167,10 @@ Devices on the Wi-Fi network your Switch is currently using are reached directly
 
 No. It only handles homebrew traffic going to your ZeroTier network's addresses and routes. It also leaves Atmosphère's Nintendo-server blocking alone.
 
+**Will it keep working after a system update?**
+
+Minor updates (say 23.5 to 23.6) are fine. A new major version (24.0) needs a new zerotier-nx: until then it won't start, and the overlay tells you which firmware it runs on. Update Atmosphère first, as you would anyway. A new release normally follows soon after Atmosphère's, and the update notification lets you know when it's out.
+
 **Can I run it alongside tailscale-nx or wireguard-nx?**
 
 You can have all three installed, but only one can handle homebrew traffic at a time. Disable the others in Sysmodules.
